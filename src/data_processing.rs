@@ -6,6 +6,7 @@ use crate::element_processing::*;
 use crate::floodfill_cache::{CoordinateBitmap, FloodFillCache};
 use crate::ground::Ground;
 use crate::ground_generation;
+use crate::jegg500::{self, Jegg500Config};
 use crate::map_preview;
 use crate::map_renderer::PreviewAccumulator;
 use crate::osm_parser::{
@@ -641,7 +642,44 @@ pub fn generate_world_with_options(
     bench.reset();
 
     // Per-cell water depth field from the LC_WATER mask; empty without land cover.
-    let big_water_field = crate::water_depth::compute_big_water_field(&ground, &xzbbox);
+    // If local J-EGG500 bathymetry files are available, override ocean depths with
+    // real measured values and fall back to the shoreline-distance estimate where
+    // bathymetry is missing.
+    let big_water_field = if args.rotation.abs() > f64::EPSILON {
+        if args.jegg500_dir.is_some() {
+            eprintln!(
+                "Warning: J-EGG500 bathymetry is disabled when --rotation is used; \
+                 falling back to shoreline-distance depth."
+            );
+        }
+        crate::water_depth::compute_big_water_field(&ground, &xzbbox)
+    } else if let Some(ref dir) = args.jegg500_dir {
+        let config = Jegg500Config::new(dir);
+        match jegg500::load_jegg500_for_bbox(&config, &llbbox, &xzbbox, args.scale) {
+            Ok(Some(bathymetry)) => {
+                crate::water_depth::compute_big_water_field_with_bathymetry(
+                    &ground,
+                    &xzbbox,
+                    &bathymetry,
+                    config.compression.unwrap_or_default(),
+                )
+            }
+            Ok(None) => {
+                eprintln!(
+                    "Warning: no J-EGG500 bathymetry files found in {}; \
+                     using shoreline-distance depth.",
+                    dir.display()
+                );
+                crate::water_depth::compute_big_water_field(&ground, &xzbbox)
+            }
+            Err(e) => {
+                eprintln!("Warning: failed to load J-EGG500 bathymetry: {e}");
+                crate::water_depth::compute_big_water_field(&ground, &xzbbox)
+            }
+        }
+    } else {
+        crate::water_depth::compute_big_water_field(&ground, &xzbbox)
+    };
     // Resolved once here: a body spanning many tiles must not be measured per tile.
     let still_surfaces = water_areas::prescan_still_surfaces(&elements, &ground, &xzbbox);
 

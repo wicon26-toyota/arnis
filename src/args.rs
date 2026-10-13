@@ -140,6 +140,13 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub aws_only_elevation: bool,
 
+    /// Directory containing J-EGG500 `mesh500_<lat>_<lon>.txt` bathymetry files.
+    /// When provided, real measured depths are used for ocean cells around Japan
+    /// instead of the synthetic shoreline-distance depth. Missing or partial data
+    /// falls back to the legacy behaviour.
+    #[arg(long, value_name = "DIR")]
+    pub jegg500_dir: Option<PathBuf>,
+
     /// Print generation-only timing to stderr (excludes data fetching)
     #[arg(long, hide = true)]
     pub benchmark: bool,

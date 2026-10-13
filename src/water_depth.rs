@@ -15,11 +15,12 @@ use crate::world_editor::{min_y, WorldEditor};
 /// Flat shoal width in chamfer-DT units; slope only starts past it.
 const SHOAL_DT_UNITS: u16 = 9;
 
-/// DT saturation cap. Depth clamps to <=6 long before this.
+/// Chamfer-distance saturation cap for the legacy shoreline-derived field.
 const DT_MAX: u8 = u8::MAX;
 
-/// Maximum water carve depth, in blocks (the deepest tier).
-const MAX_WATER_DEPTH: i32 = 6;
+/// Maximum representable water carve depth, in blocks. The legacy mask-based
+/// fallback still tops out at 6; bathymetry overrides may use the full u8 range.
+const MAX_WATER_DEPTH: i32 = u8::MAX as i32;
 
 /// Cap on water sub-rect cells (bounds memory, keeps u32 indices valid); ~1000 km².
 const MAX_WATER_FIELD_CELLS: usize = 1_000_000_000;
@@ -76,9 +77,13 @@ fn for_each_neighbor(idx: usize, w: usize, h: usize, mut f: impl FnMut(usize)) {
     }
 }
 
-/// Baked per-cell carve depth (0..=6), nibble-packed over the water sub-rect.
+/// Baked per-cell water carve depths over the water sub-rectangle.
 pub struct BigWaterField {
+    /// Legacy shoreline-distance depth, nibble-packed (0..=6).
     depth: Vec<u8>,
+    /// Optional real-world bathymetry depth after compression, one byte per cell.
+    /// A zero entry means that no usable bathymetry sample was available there.
+    bathymetry_depth_blocks: Option<Vec<u8>>,
     width: usize,
     height: usize,
     min_x: i32,
@@ -89,6 +94,7 @@ impl BigWaterField {
     fn empty() -> Self {
         Self {
             depth: Vec::new(),
+            bathymetry_depth_blocks: None,
             width: 0,
             height: 0,
             min_x: 0,
@@ -110,7 +116,15 @@ impl BigWaterField {
     #[inline]
     pub fn depth_at(&self, x: i32, z: i32) -> i32 {
         match self.local_idx(x, z) {
-            Some(i) => i32::from(nibble_get(&self.depth, i)),
+            Some(i) => {
+                if let Some(bathy) = self.bathymetry_depth_blocks.as_ref() {
+                    let compressed = bathy.get(i).copied().unwrap_or(0);
+                    if compressed > 0 {
+                        return i32::from(compressed);
+                    }
+                }
+                i32::from(nibble_get(&self.depth, i))
+            }
             None => 0,
         }
     }
@@ -144,6 +158,132 @@ pub(crate) fn grid_span_to_block_span(
     let lo = ((g_lo as f64 - 0.5) * f).floor() as i32 - 1;
     let hi = ((g_hi as f64 + 0.5) * f).ceil() as i32 + 1;
     (lo.max(0), hi.min(world_dim as i32 - 1))
+}
+
+/// Regular bathymetry samples already projected into Arnis world X/Z coordinates.
+/// `depth_m` stores positive metres below the local water datum; non-positive or
+/// non-finite values are treated as missing data and fall back to the legacy field.
+/// Each sample covers a `cell_size_blocks` square in the X/Z plane. For example,
+/// a 500 m J-EGG500 cell maps to 50 blocks when the chosen world scale is 10 m/block.
+///
+/// This type deliberately does not parse J-EGG500/JHA files or perform geographic
+/// projection. Convert source coordinates into this world-aligned grid in the
+/// data-loading layer, where Arnis' map projection and scale are available.
+#[derive(Clone, Debug)]
+pub struct BathymetryGrid {
+    depth_m: Vec<f32>,
+    width: usize,
+    height: usize,
+    min_x: i32,
+    min_z: i32,
+    cell_size_blocks: usize,
+}
+
+impl BathymetryGrid {
+    /// Creates a world-X/Z grid. `min_x`/`min_z` mark the near corner of the first
+    /// cell, and `cell_size_blocks` is that cell's width in Minecraft X/Z blocks.
+    /// Returns an error when dimensions do not match data or cell size is zero.
+    pub fn new(
+        depth_m: Vec<f32>,
+        width: usize,
+        height: usize,
+        min_x: i32,
+        min_z: i32,
+        cell_size_blocks: usize,
+    ) -> Result<Self, &'static str> {
+        let expected = width.checked_mul(height).ok_or("bathymetry dimensions overflow")?;
+        if width == 0 || height == 0 {
+            return Err("bathymetry grid dimensions must be non-zero");
+        }
+        if cell_size_blocks == 0 {
+            return Err("bathymetry cell size must be non-zero");
+        }
+        // Ensure the block-space extents cannot overflow when queried.
+        width.checked_mul(cell_size_blocks).ok_or("bathymetry X extent overflow")?;
+        height.checked_mul(cell_size_blocks).ok_or("bathymetry Z extent overflow")?;
+        if depth_m.len() != expected {
+            return Err("bathymetry sample count does not match width * height");
+        }
+        Ok(Self { depth_m, width, height, min_x, min_z, cell_size_blocks })
+    }
+
+    /// Samples the containing grid cell. Returns `None` outside the grid or for NoData.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    #[allow(dead_code)]
+    pub fn height(&self) -> usize {
+        self.height
+    }
+
+    #[allow(dead_code)]
+    pub fn cell_size_blocks(&self) -> usize {
+        self.cell_size_blocks
+    }
+
+    #[allow(dead_code)]
+    pub fn min_x(&self) -> i32 {
+        self.min_x
+    }
+
+    #[allow(dead_code)]
+    pub fn min_z(&self) -> i32 {
+        self.min_z
+    }
+
+    pub fn sample_depth_m(&self, x: i32, z: i32) -> Option<f32> {
+        let lx = i64::from(x) - i64::from(self.min_x);
+        let lz = i64::from(z) - i64::from(self.min_z);
+        let span_x = self.width * self.cell_size_blocks;
+        let span_z = self.height * self.cell_size_blocks;
+        if lx < 0 || lz < 0 || lx as usize >= span_x || lz as usize >= span_z {
+            return None;
+        }
+        let gx = lx as usize / self.cell_size_blocks;
+        let gz = lz as usize / self.cell_size_blocks;
+        let value = *self.depth_m.get(gz * self.width + gx)?;
+        (value.is_finite() && value > 0.0).then_some(value)
+    }
+}
+
+/// Nonlinear real-depth-to-Minecraft-depth mapping.
+///
+/// Formula: `blocks = blocks_per_log_unit * ln(1 + depth_m / knee_m)`.
+/// Larger `knee_m` preserves more separation in deep water; `max_blocks` limits
+/// the generated vertical span. Any positive depth maps to at least one block.
+#[derive(Clone, Copy, Debug)]
+pub struct NonlinearDepthCompression {
+    pub knee_m: f32,
+    pub blocks_per_log_unit: f32,
+    pub max_blocks: u8,
+}
+
+impl Default for NonlinearDepthCompression {
+    fn default() -> Self {
+        Self {
+            knee_m: 100.0,
+            blocks_per_log_unit: 32.0,
+            max_blocks: 120,
+        }
+    }
+}
+
+impl NonlinearDepthCompression {
+    /// Compresses positive water depth in metres to a Minecraft block count.
+    #[inline]
+    pub fn compress_meters(self, depth_m: f32) -> u8 {
+        if !depth_m.is_finite() || depth_m <= 0.0 || !self.knee_m.is_finite()
+            || self.knee_m <= 0.0 || !self.blocks_per_log_unit.is_finite()
+            || self.blocks_per_log_unit <= 0.0 || self.max_blocks == 0
+        {
+            return 0;
+        }
+        let blocks = self.blocks_per_log_unit * (1.0 + depth_m / self.knee_m).ln();
+        (blocks.round().clamp(1.0, f32::from(self.max_blocks))) as u8
+    }
 }
 
 /// Run a chamfer DT over the LC_WATER mask and bake per-cell carve depth.
@@ -246,11 +386,55 @@ pub fn compute_big_water_field(ground: &Ground, xzbbox: &XZBBox) -> BigWaterFiel
 
     BigWaterField {
         depth,
+        bathymetry_depth_blocks: None,
         width: sw,
         height: sh,
         min_x: smin_x,
         min_z: smin_z,
     }
+}
+
+/// Computes the ordinary water field, then overrides cells with valid bathymetry
+/// samples. Cells outside the supplied grid or marked NoData retain the existing
+/// distance-transform result, so partial datasets can be used safely.
+pub fn compute_big_water_field_with_bathymetry(
+    ground: &Ground,
+    xzbbox: &XZBBox,
+    bathymetry: &BathymetryGrid,
+    compression: NonlinearDepthCompression,
+) -> BigWaterField {
+    let mut field = compute_big_water_field(ground, xzbbox);
+    let total = match field.width.checked_mul(field.height) {
+        Some(total) if total > 0 => total,
+        _ => return field,
+    };
+
+    let mut overrides = vec![0u8; total];
+    let off_x = xzbbox.min_x();
+    let off_z = xzbbox.min_z();
+    let mut any_override = false;
+    for lz in 0..field.height {
+        let z = field.min_z + lz as i32;
+        for lx in 0..field.width {
+            let x = field.min_x + lx as i32;
+            let local = XZPoint::new(x - off_x, z - off_z);
+            if ground.cover_class(local) != LC_WATER {
+                continue;
+            }
+            if let Some(depth_m) = bathymetry.sample_depth_m(x, z) {
+                let compressed = compression.compress_meters(depth_m);
+                if compressed > 0 {
+                    overrides[lz * field.width + lx] = compressed;
+                    any_override = true;
+                }
+            }
+        }
+    }
+
+    if any_override {
+        field.bathymetry_depth_blocks = Some(overrides);
+    }
+    field
 }
 
 /// In-place two-sweep chamfer-3-4 DT. Input: 0 = shore, `DT_MAX` = water seed.
@@ -581,7 +765,7 @@ fn bridge_adjacent(road_mask: &RoadMaskBitmap, x: i32, z: i32) -> bool {
 
 /// Dune amplitude: target keyed off body width (7x7 BWF max), capped below the surface.
 fn dune_amp(body_max: i32, depth: i32) -> i32 {
-    // BWF depth caps at MAX_WATER_DEPTH=6, so 6 must map to the top tier.
+    // Legacy shoreline-distance depths top out at 6; bathymetry overrides may be deeper.
     let target = match body_max {
         ..=3 => 2,
         4..=5 => 3,
@@ -820,11 +1004,44 @@ mod tests {
     }
 
     #[test]
+    fn nonlinear_bathymetry_compression_is_monotonic_and_capped() {
+        let compression = NonlinearDepthCompression::default();
+        assert_eq!(compression.compress_meters(0.0), 0);
+        let values = [1.0, 10.0, 50.0, 100.0, 500.0, 1_000.0, 5_000.0];
+        let compressed: Vec<u8> = values
+            .iter()
+            .map(|&depth| compression.compress_meters(depth))
+            .collect();
+        assert!(compressed.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(compressed.iter().all(|&blocks| blocks <= compression.max_blocks));
+        assert!(compressed[0] >= 1);
+        assert_eq!(*compressed.last().unwrap(), compression.max_blocks);
+    }
+
+    #[test]
+    fn bathymetry_grid_handles_bounds_and_nodata() {
+        let grid = BathymetryGrid::new(
+            vec![10.0, 20.0, f32::NAN, 0.0],
+            2,
+            2,
+            100,
+            -20,
+            1,
+        ).unwrap();
+        assert_eq!(grid.sample_depth_m(100, -20), Some(10.0));
+        assert_eq!(grid.sample_depth_m(101, -20), Some(20.0));
+        assert_eq!(grid.sample_depth_m(100, -19), None);
+        assert_eq!(grid.sample_depth_m(101, -19), None);
+        assert_eq!(grid.sample_depth_m(99, -20), None);
+    }
+
+    #[test]
     fn body_max_7x7_edge_safe() {
         let mut depth = vec![0u8; 8];
         nibble_set(&mut depth, 5, 6); // cell (1,1) in a 4x4 field
         let bwf = BigWaterField {
             depth,
+            bathymetry_depth_blocks: None,
             width: 4,
             height: 4,
             min_x: 0,
@@ -918,6 +1135,110 @@ mod water_field_traversal_tests {
     use super::*;
     use crate::ground::test_support::ground_with_land_cover_and_elevation;
     use crate::land_cover::LandCoverData;
+
+    fn all_water_ground(side: usize) -> Ground {
+        let grid = vec![vec![LC_WATER; side]; side];
+        let (w, h) = (grid[0].len(), grid.len());
+        let lc = LandCoverData {
+            grid,
+            water_distance: vec![vec![0u8; w]; h],
+            water_blend_cache: once_cell::sync::OnceCell::new(),
+            width: w,
+            height: h,
+            cells_per_meter: 1.0,
+        };
+        ground_with_land_cover_and_elevation(lc, w, h)
+    }
+
+    #[test]
+    fn bathymetry_override_increases_depth_beyond_legacy_max() {
+        let side = 48usize;
+        let bbox = XZBBox::rect_from_min_max(0, 0, side as i32 - 1, side as i32 - 1).unwrap();
+        let ground = all_water_ground(side);
+        let legacy = compute_big_water_field(&ground, &bbox);
+        assert!(legacy.depth_at(side as i32 / 2, side as i32 / 2) <= 6);
+
+        // One big bathymetry cell covering the whole world, 1000 m deep.
+        let bathymetry = BathymetryGrid::new(
+            vec![1000.0f32],
+            1,
+            1,
+            bbox.min_x(),
+            bbox.min_z(),
+            side,
+        )
+        .unwrap();
+        let with_bathy = compute_big_water_field_with_bathymetry(
+            &ground,
+            &bbox,
+            &bathymetry,
+            NonlinearDepthCompression::default(),
+        );
+        let d = with_bathy.depth_at(side as i32 / 2, side as i32 / 2);
+        assert!(d > 6, "bathymetry should exceed legacy max, got {d}");
+        assert_eq!(d, NonlinearDepthCompression::default().compress_meters(1000.0) as i32);
+    }
+
+    #[test]
+    fn bathymetry_missing_cells_fall_back_to_legacy() {
+        let side = 48usize;
+        let bbox = XZBBox::rect_from_min_max(0, 0, side as i32 - 1, side as i32 - 1).unwrap();
+        let ground = all_water_ground(side);
+        let legacy = compute_big_water_field(&ground, &bbox);
+
+        // Bathymetry grid with valid data only in the first cell.
+        let mut depths = vec![f32::NAN; 4];
+        depths[0] = 50.0;
+        let bathymetry = BathymetryGrid::new(depths, 2, 2, 0, 0, side / 2).unwrap();
+        let with_bathy = compute_big_water_field_with_bathymetry(
+            &ground,
+            &bbox,
+            &bathymetry,
+            NonlinearDepthCompression::default(),
+        );
+
+        // First quadrant uses bathymetry.
+        assert!(with_bathy.depth_at(5, 5) > legacy.depth_at(5, 5));
+        // Opposite quadrant has no bathymetry and keeps legacy depth.
+        assert_eq!(
+            with_bathy.depth_at(side as i32 - 5, side as i32 - 5),
+            legacy.depth_at(side as i32 - 5, side as i32 - 5)
+        );
+    }
+
+    #[test]
+    fn bathymetry_outside_water_subrect_is_ignored() {
+        let side = 48usize;
+        let bbox = XZBBox::rect_from_min_max(0, 0, side as i32 - 1, side as i32 - 1).unwrap();
+        let ground = all_water_ground(side);
+
+        // Bathymetry grid starts far outside the world.
+        let bathymetry = BathymetryGrid::new(
+            vec![1000.0f32],
+            1,
+            1,
+            side as i32 + 100,
+            side as i32 + 100,
+            10,
+        )
+        .unwrap();
+        let with_bathy = compute_big_water_field_with_bathymetry(
+            &ground,
+            &bbox,
+            &bathymetry,
+            NonlinearDepthCompression::default(),
+        );
+        let legacy = compute_big_water_field(&ground, &bbox);
+        for z in 0..side as i32 {
+            for x in 0..side as i32 {
+                assert_eq!(
+                    with_bathy.depth_at(x, z),
+                    legacy.depth_at(x, z),
+                    "outside bathymetry leaked at ({x},{z})"
+                );
+            }
+        }
+    }
 
     const SIDE: usize = 48;
 

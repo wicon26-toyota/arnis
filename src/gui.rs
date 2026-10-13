@@ -1377,6 +1377,7 @@ fn gui_start_generation(
                 rotation: rotation_angle.clamp(-90.0, 90.0),
                 disable_height_limit,
                 aws_only_elevation,
+                jegg500_dir: None,
                 benchmark: false,
                 bake_lighting: bake_lighting_enabled,
                 voxy_lod: voxy_lod_enabled,

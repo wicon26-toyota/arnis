@@ -1,0 +1,602 @@
+//! J-EGG500 bathymetric data loader.
+//!
+//! J-EGG500 is a 500-metre mesh of water depths around Japan, distributed as
+//! fixed-format text files named `mesh500_<lat>_<lon>.txt`. Each file covers a
+//! 1° × 1° integer-degree tile. Every record contains:
+//!
+//!   kind (0 or 1), latitude (degrees), longitude (degrees), depth (metres)
+//!
+//! - kind 0: measured depth or depth derived from a contour line.
+//! - kind 1: depth produced by interpolation.
+//! - WGS-84 is used for horizontal coordinates.
+//! - Depths are positive below the water datum; non-positive values are treated
+//!   as land or missing data.
+//!
+//! The loader reads local files only. It does not download data automatically,
+//! does not assume any API, and does not redistribute the raw dataset.
+
+use crate::coordinate_system::cartesian::{XZBBox, XZPoint};
+use crate::coordinate_system::geographic::LLBBox;
+use crate::coordinate_system::transformation::CoordTransformer;
+use crate::water_depth::{BathymetryGrid, NonlinearDepthCompression};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+
+/// Largest bathymetry grid this loader will allocate. Roughly limits resident
+/// memory to a few hundred megabytes for the f32 depth buffer.
+const MAX_BATHYMETRY_CELLS: usize = 128_000_000;
+
+/// J-EGG500 mesh spacing in metres.
+const MESH_SPACING_M: f64 = 500.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JeggSampleKind {
+    Measured,
+    Interpolated,
+}
+
+/// One raw J-EGG500 record.
+#[derive(Debug, Clone)]
+pub struct JeggSample {
+    /// Sample origin: measured/contour-derived or interpolated.
+    #[allow(dead_code)]
+    pub kind: JeggSampleKind,
+    pub lat: f64,
+    pub lon: f64,
+    pub depth_m: f32,
+}
+
+/// How a J-EGG500 sample is mapped onto the Minecraft X/Z grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum JeggInterpolation {
+    /// Use the depth of the J-EGG500 cell that contains the Minecraft block.
+    /// This matches the 500 m native resolution and avoids inventing values
+    /// across data gaps.
+    #[default]
+    NearestCell,
+}
+
+/// Configuration for the J-EGG500 loading step.
+#[derive(Debug, Clone)]
+pub struct Jegg500Config {
+    /// Directory containing `mesh500_<lat>_<lon>.txt` files.
+    pub base_dir: PathBuf,
+    /// Interpolation method when sampling the J-EGG500 mesh.
+    pub interpolation: JeggInterpolation,
+    /// Optional override for the compression applied after loading. When `None`
+    /// the default `NonlinearDepthCompression` is used.
+    pub compression: Option<NonlinearDepthCompression>,
+}
+
+impl Jegg500Config {
+    /// Sets the interpolation method. Currently only `NearestCell` is
+    /// implemented; other variants will return an error at load time.
+    #[allow(dead_code)]
+    pub fn with_interpolation(mut self, interpolation: JeggInterpolation) -> Self {
+        self.interpolation = interpolation;
+        self
+    }
+    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            base_dir: base_dir.into(),
+            interpolation: JeggInterpolation::NearestCell,
+            compression: None,
+        }
+    }
+}
+
+/// Parse one whitespace-separated J-EGG500 record.
+///
+/// The official Fortran format is `I1,F10.5,F10.5,I6`, but real files use
+/// variable spacing. We split on whitespace and validate the four fields.
+fn parse_jegg500_line(line: &str) -> Result<Option<JeggSample>, String> {
+    let line = line.split('%').next().unwrap_or("");
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    if fields.len() < 4 {
+        return Err(format!("J-EGG500 line has too few fields: {line:?}"));
+    }
+    if fields.len() > 4 {
+        return Err(format!("J-EGG500 line has too many fields: {line:?}"));
+    }
+
+    let kind = match fields[0] {
+        "0" => JeggSampleKind::Measured,
+        "1" => JeggSampleKind::Interpolated,
+        _ => return Err(format!("J-EGG500 kind must be 0 or 1, got {:?}", fields[0])),
+    };
+
+    let lat: f64 = fields[1]
+        .parse()
+        .map_err(|e| format!("J-EGG500 latitude parse error in {line:?}: {e}"))?;
+    let lon: f64 = fields[2]
+        .parse()
+        .map_err(|e| format!("J-EGG500 longitude parse error in {line:?}: {e}"))?;
+    let depth: i32 = fields[3]
+        .parse()
+        .map_err(|e| format!("J-EGG500 depth parse error in {line:?}: {e}"))?;
+
+    if !lat.is_finite() || !lon.is_finite() {
+        return Err(format!("J-EGG500 non-finite coordinates in {line:?}"));
+    }
+    if lat < -90.0 || lat > 90.0 {
+        return Err(format!("J-EGG500 latitude out of range: {lat}"));
+    }
+    if lon < -180.0 || lon > 180.0 {
+        return Err(format!("J-EGG500 longitude out of range: {lon}"));
+    }
+
+    // Non-positive depths are land or NoData in this dataset.
+    if depth <= 0 {
+        return Ok(None);
+    }
+
+    Ok(Some(JeggSample {
+        kind,
+        lat,
+        lon,
+        depth_m: depth as f32,
+    }))
+}
+
+/// Return the integer-degree tile names that overlap `llbbox`.
+fn overlapping_tile_paths(base_dir: &Path, llbbox: &LLBBox) -> Vec<PathBuf> {
+    let min_lat = llbbox.min().lat().floor() as i32;
+    let max_lat = llbbox.max().lat().ceil() as i32;
+    let min_lon = llbbox.min().lng().floor() as i32;
+    let max_lon = llbbox.max().lng().ceil() as i32;
+
+    let mut paths = Vec::new();
+    for lat in min_lat..=max_lat {
+        for lon in min_lon..=max_lon {
+            paths.push(base_dir.join(format!("mesh500_{lat}_{lon}.txt")));
+        }
+    }
+    paths
+}
+
+/// Read all samples from a single J-EGG500 tile file.
+fn read_tile_file(path: &Path) -> Result<Vec<JeggSample>, String> {
+    let file = File::open(path)
+        .map_err(|e| format!("Failed to open J-EGG500 file {}: {e}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut samples = Vec::new();
+    for (line_no, line) in reader.lines().enumerate() {
+        let line = line
+            .map_err(|e| format!("Failed to read line {} of {}: {e}", line_no + 1, path.display()))?;
+        match parse_jegg500_line(&line) {
+            Ok(Some(sample)) => samples.push(sample),
+            Ok(None) => {}
+            Err(e) => {
+                return Err(format!(
+                    "{} line {}: {e}",
+                    path.display(),
+                    line_no + 1
+                ));
+            }
+        }
+    }
+    Ok(samples)
+}
+
+/// Determine the Minecraft X/Z grid that covers `xzbbox` using the given
+/// J-EGG500 cell size.
+fn xzbbox_to_grid_bounds(
+    xzbbox: &XZBBox,
+    cell_size_blocks: usize,
+) -> Result<(i32, i32, usize, usize), String> {
+    if cell_size_blocks == 0 {
+        return Err("J-EGG500 cell size must be non-zero".to_string());
+    }
+
+    let min_x = xzbbox.min_x();
+    let min_z = xzbbox.min_z();
+    let max_x = xzbbox.max_x();
+    let max_z = xzbbox.max_z();
+
+    let width_blocks = max_x
+        .checked_sub(min_x)
+        .and_then(|d| d.checked_add(1))
+        .ok_or("J-EGG500 world X span overflow")? as usize;
+    let height_blocks = max_z
+        .checked_sub(min_z)
+        .and_then(|d| d.checked_add(1))
+        .ok_or("J-EGG500 world Z span overflow")? as usize;
+
+    let width = width_blocks
+        .div_ceil(cell_size_blocks)
+        .max(1);
+    let height = height_blocks
+        .div_ceil(cell_size_blocks)
+        .max(1);
+
+    width
+        .checked_mul(height)
+        .filter(|&cells| cells <= MAX_BATHYMETRY_CELLS)
+        .ok_or_else(|| {
+            format!(
+                "J-EGG500 bathymetry grid would be too large: {} cells (limit {})",
+                width.saturating_mul(height),
+                MAX_BATHYMETRY_CELLS
+            )
+        })?;
+
+    Ok((min_x, min_z, width, height))
+}
+
+/// Map a J-EGG500 sample to a grid cell and accumulate the depth.
+fn accumulate_sample(
+    sample: &JeggSample,
+    transformer: &CoordTransformer,
+    grid_origin_x: i32,
+    grid_origin_z: i32,
+    cell_size_blocks: usize,
+    grid_width: usize,
+    grid_height: usize,
+    sums: &mut HashMap<(usize, usize), (f64, u32)>,
+) {
+    use crate::coordinate_system::geographic::LLPoint;
+    let llpoint = match LLPoint::new(sample.lat, sample.lon) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let XZPoint { x, z } = transformer.transform_point(llpoint);
+
+    let lx = i64::from(x) - i64::from(grid_origin_x);
+    let lz = i64::from(z) - i64::from(grid_origin_z);
+    if lx < 0 || lz < 0 {
+        return;
+    }
+    let gx = lx as usize / cell_size_blocks;
+    let gz = lz as usize / cell_size_blocks;
+    if gx >= grid_width || gz >= grid_height {
+        return;
+    }
+
+    let entry = sums.entry((gx, gz)).or_insert((0.0, 0));
+    entry.0 += f64::from(sample.depth_m);
+    entry.1 += 1;
+}
+
+/// Build a world-aligned bathymetry grid from local J-EGG500 files.
+///
+/// Returns `Ok(None)` when no data directory was supplied, the directory does
+/// not exist, or no overlapping files contain valid samples. This lets the
+/// caller fall back to the legacy shoreline-distance water depth.
+pub fn load_jegg500_for_bbox(
+    config: &Jegg500Config,
+    llbbox: &LLBBox,
+    xzbbox: &XZBBox,
+    scale: f64,
+) -> Result<Option<BathymetryGrid>, String> {
+    if !config.base_dir.exists() {
+        return Ok(None);
+    }
+    if !config.base_dir.is_dir() {
+        return Err(format!(
+            "J-EGG500 path is not a directory: {}",
+            config.base_dir.display()
+        ));
+    }
+
+    if config.interpolation != JeggInterpolation::NearestCell {
+        return Err(format!(
+            "J-EGG500 interpolation {:?} is not implemented",
+            config.interpolation
+        ));
+    }
+
+    let (transformer, _) = CoordTransformer::llbbox_to_xzbbox(llbbox, scale)
+        .map_err(|e| format!("J-EGG500 coordinate transformation failed: {e}"))?;
+
+    // A 500 m J-EGG500 cell maps to this many Minecraft blocks.
+    let cell_size_blocks = (MESH_SPACING_M * scale)
+        .round()
+        .max(1.0)
+        .min(usize::MAX as f64) as usize;
+
+    let (grid_origin_x, grid_origin_z, grid_width, grid_height) =
+        xzbbox_to_grid_bounds(xzbbox, cell_size_blocks)?;
+
+    let mut sums: HashMap<(usize, usize), (f64, u32)> = HashMap::new();
+    let mut any_file = false;
+    let mut any_sample = false;
+
+    for path in overlapping_tile_paths(&config.base_dir, llbbox) {
+        if !path.exists() {
+            continue;
+        }
+        any_file = true;
+        for sample in read_tile_file(&path)? {
+            any_sample = true;
+            accumulate_sample(
+                &sample,
+                &transformer,
+                grid_origin_x,
+                grid_origin_z,
+                cell_size_blocks,
+                grid_width,
+                grid_height,
+                &mut sums,
+            );
+        }
+    }
+
+    if !any_file {
+        return Ok(None);
+    }
+    if !any_sample {
+        return Ok(None);
+    }
+
+    let total = grid_width
+        .checked_mul(grid_height)
+        .ok_or("J-EGG500 grid dimension overflow")?;
+    let mut depth_m = vec![f32::NAN; total];
+    for (gz, gx) in (0..grid_height).flat_map(|z| (0..grid_width).map(move |x| (z, x))) {
+        if let Some((sum, count)) = sums.get(&(gx, gz)) {
+            if *count > 0 {
+                depth_m[gz * grid_width + gx] = (sum / f64::from(*count)) as f32;
+            }
+        }
+    }
+
+    Ok(Some(
+        BathymetryGrid::new(
+            depth_m,
+            grid_width,
+            grid_height,
+            grid_origin_x,
+            grid_origin_z,
+            cell_size_blocks,
+        )
+        .map_err(|e| format!("J-EGG500 bathymetry grid creation failed: {e}"))?,
+    ))
+}
+
+/// Convenience: build a `BathymetryGrid` directly from an iterator of samples
+/// already projected to Minecraft X/Z. Used by tests with synthetic data.
+#[cfg(test)]
+pub fn build_bathymetry_grid_from_samples(
+    samples: &[JeggSample],
+    transformer: &CoordTransformer,
+    xzbbox: &XZBBox,
+    scale: f64,
+) -> Result<BathymetryGrid, String> {
+    let cell_size_blocks = (MESH_SPACING_M * scale).max(1.0).min(usize::MAX as f64) as usize;
+    let (grid_origin_x, grid_origin_z, grid_width, grid_height) =
+        xzbbox_to_grid_bounds(xzbbox, cell_size_blocks)?;
+
+    let mut sums: HashMap<(usize, usize), (f64, u32)> = HashMap::new();
+    for sample in samples {
+        accumulate_sample(
+            sample,
+            transformer,
+            grid_origin_x,
+            grid_origin_z,
+            cell_size_blocks,
+            grid_width,
+            grid_height,
+            &mut sums,
+        );
+    }
+
+    let total = grid_width
+        .checked_mul(grid_height)
+        .ok_or("J-EGG500 grid dimension overflow")?;
+    let mut depth_m = vec![f32::NAN; total];
+    for (gz, gx) in (0..grid_height).flat_map(|z| (0..grid_width).map(move |x| (z, x))) {
+        if let Some((sum, count)) = sums.get(&(gx, gz)) {
+            if *count > 0 {
+                depth_m[gz * grid_width + gx] = (sum / f64::from(*count)) as f32;
+            }
+        }
+    }
+
+    BathymetryGrid::new(
+        depth_m,
+        grid_width,
+        grid_height,
+        grid_origin_x,
+        grid_origin_z,
+        cell_size_blocks,
+    )
+    .map_err(|e| format!("Synthetic bathymetry grid creation failed: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coordinate_system::cartesian::XZBBox;
+    use crate::coordinate_system::geographic::LLBBox;
+
+    #[test]
+    fn parse_valid_measured_line() {
+        let s = parse_jegg500_line("0  34.07729 136.22777    24").unwrap().unwrap();
+        assert_eq!(s.kind, JeggSampleKind::Measured);
+        assert!((s.lat - 34.07729).abs() < 1e-5);
+        assert!((s.lon - 136.22777).abs() < 1e-5);
+        assert_eq!(s.depth_m, 24.0);
+    }
+
+    #[test]
+    fn parse_valid_interpolated_line() {
+        let s = parse_jegg500_line("1 34.0 136.0 100").unwrap().unwrap();
+        assert_eq!(s.kind, JeggSampleKind::Interpolated);
+        assert_eq!(s.depth_m, 100.0);
+    }
+
+    #[test]
+    fn parse_non_positive_depth_is_nodata() {
+        assert!(parse_jegg500_line("0 34.0 136.0 0").unwrap().is_none());
+        assert!(parse_jegg500_line("0 34.0 136.0 -5").unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_empty_and_comment_lines() {
+        assert!(parse_jegg500_line("").unwrap().is_none());
+        assert!(parse_jegg500_line("   ").unwrap().is_none());
+        assert!(parse_jegg500_line("% comment").unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_rejects_bad_kind() {
+        assert!(parse_jegg500_line("2 34.0 136.0 10").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_malformed_numbers() {
+        assert!(parse_jegg500_line("0 abc 136.0 10").is_err());
+        assert!(parse_jegg500_line("0 34.0 136.0 xyz").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_out_of_range_coords() {
+        assert!(parse_jegg500_line("0 91.0 136.0 10").is_err());
+        assert!(parse_jegg500_line("0 34.0 181.0 10").is_err());
+    }
+
+    #[test]
+    fn overlapping_tile_paths_cover_bbox() {
+        let base = PathBuf::from("/tmp");
+        let llbbox = LLBBox::new(34.0, 136.0, 35.5, 138.5).unwrap();
+        let paths = overlapping_tile_paths(&base, &llbbox);
+        assert!(paths.contains(&base.join("mesh500_34_136.txt")));
+        assert!(paths.contains(&base.join("mesh500_35_138.txt")));
+        assert!(!paths.contains(&base.join("mesh500_33_135.txt")));
+    }
+
+    #[test]
+    fn config_builder_accepts_interpolation() {
+        let config = Jegg500Config::new("/tmp").with_interpolation(JeggInterpolation::NearestCell);
+        assert_eq!(config.interpolation, JeggInterpolation::NearestCell);
+    }
+
+    #[test]
+    fn load_missing_directory_returns_none() {
+        let config = Jegg500Config::new("/nonexistent/path/for/jegg500");
+        let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
+        let xzbbox = XZBBox::rect_from_xz_lengths(100.0, 100.0).unwrap();
+        assert!(load_jegg500_for_bbox(&config, &llbbox, &xzbbox, 1.0).unwrap().is_none());
+    }
+
+    #[test]
+    fn xzbbox_to_grid_bounds_rounds_up() {
+        let xzbbox = XZBBox::rect_from_min_max(0, 0, 99, 99).unwrap();
+        let (ox, oz, w, h) = xzbbox_to_grid_bounds(&xzbbox, 50).unwrap();
+        assert_eq!((ox, oz), (0, 0));
+        assert_eq!((w, h), (2, 2));
+    }
+
+    #[test]
+    fn xzbbox_to_grid_bounds_rejects_zero_cell_size() {
+        let xzbbox = XZBBox::rect_from_min_max(0, 0, 10, 10).unwrap();
+        assert!(xzbbox_to_grid_bounds(&xzbbox, 0).is_err());
+    }
+
+    #[test]
+    fn synthetic_samples_project_to_expected_cells() {
+        let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
+        let (transformer, xzbbox) = CoordTransformer::llbbox_to_xzbbox(&llbbox, 1.0).unwrap();
+        let samples = vec![
+            JeggSample {
+                kind: JeggSampleKind::Measured,
+                lat: 34.5,
+                lon: 136.5,
+                depth_m: 42.0,
+            },
+        ];
+        let grid = build_bathymetry_grid_from_samples(&samples, &transformer, &xzbbox, 1.0)
+            .unwrap();
+        // With scale 1.0 the 500 m cell is 500 blocks; the sample sits near the
+        // middle of the world, so it lands in the first (and only) grid cell.
+        let xz = transformer.transform_point(crate::coordinate_system::geographic::LLPoint::new(
+            34.5, 136.5,
+        ).unwrap());
+        assert_eq!(grid.sample_depth_m(xz.x, xz.z), Some(42.0));
+    }
+
+    #[test]
+    fn bathymetry_grid_nodata_outside_samples() {
+        let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
+        let (transformer, xzbbox) = CoordTransformer::llbbox_to_xzbbox(&llbbox, 1.0).unwrap();
+        let samples = vec![
+            JeggSample {
+                kind: JeggSampleKind::Measured,
+                lat: 34.1,
+                lon: 136.1,
+                depth_m: 10.0,
+            },
+        ];
+        let grid = build_bathymetry_grid_from_samples(&samples, &transformer, &xzbbox, 1.0)
+            .unwrap();
+        let xz = transformer.transform_point(crate::coordinate_system::geographic::LLPoint::new(
+            34.9, 136.9,
+        ).unwrap());
+        assert_eq!(grid.sample_depth_m(xz.x, xz.z), None);
+    }
+
+    #[test]
+    fn compression_default_parameters_match_formula() {
+        let c = NonlinearDepthCompression::default();
+        assert_eq!(c.compress_meters(0.0), 0);
+        let expected_100m = (32.0 * (1.0 + 100.0 / 100.0f32).ln()).round() as u8;
+        assert_eq!(c.compress_meters(100.0), expected_100m);
+        assert_eq!(c.compress_meters(100.0), 22);
+    }
+
+    #[test]
+    fn compression_handles_nonfinite_and_negative_depths() {
+        let c = NonlinearDepthCompression::default();
+        assert_eq!(c.compress_meters(f32::NAN), 0);
+        assert_eq!(c.compress_meters(f32::INFINITY), 0);
+        assert_eq!(c.compress_meters(f32::NEG_INFINITY), 0);
+        assert_eq!(c.compress_meters(-10.0), 0);
+        assert_eq!(c.compress_meters(0.0), 0);
+    }
+
+    #[test]
+    fn compression_clamps_to_max_blocks() {
+        let c = NonlinearDepthCompression::default();
+        assert_eq!(c.compress_meters(10_000.0), c.max_blocks);
+        assert_eq!(c.compress_meters(5_000.0), c.max_blocks);
+    }
+
+    #[test]
+    fn compression_is_monotonic_for_positive_depths() {
+        let c = NonlinearDepthCompression::default();
+        let mut prev = 0u8;
+        for depth in [1.0, 5.0, 10.0, 50.0, 100.0, 200.0, 500.0, 1_000.0, 5_000.0] {
+            let blocks = c.compress_meters(depth);
+            assert!(
+                blocks >= prev,
+                "non-monotonic at depth={depth}: {blocks} < {prev}"
+            );
+            prev = blocks;
+        }
+        assert_eq!(prev, c.max_blocks);
+    }
+
+    /// Integration test with the real J-EGG500 files shipped in `jegg500/`,
+    /// covering a 1° × 1° tile around central Japan.
+    #[test]
+    fn load_real_jegg500_files_produces_grid() {
+        let config = Jegg500Config::new("jegg500");
+        let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
+        let xzbbox = XZBBox::rect_from_xz_lengths(100_000.0, 100_000.0).unwrap();
+        let grid = load_jegg500_for_bbox(&config, &llbbox, &xzbbox, 1.0)
+            .unwrap()
+            .expect("real J-EGG500 files should load successfully");
+        // At scale 1.0 a 500 m cell is 500 blocks; a 100.001 km world spans
+        // 100001 blocks, which rounds up to 201 cells.
+        assert_eq!(grid.cell_size_blocks(), 500);
+        assert_eq!(grid.width(), 201);
+        assert_eq!(grid.height(), 201);
+        assert_eq!((grid.min_x(), grid.min_z()), (0, 0));
+    }
+}

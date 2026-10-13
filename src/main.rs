@@ -51,6 +51,7 @@ mod tile;
 mod trees;
 mod version_check;
 mod voxy;
+mod jegg500;
 mod water_depth;
 mod world_editor;
 mod world_utils;
