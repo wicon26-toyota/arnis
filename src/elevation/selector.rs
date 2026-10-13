@@ -5,6 +5,7 @@ use crate::elevation::providers::aws_terrain::AwsTerrain;
 use crate::elevation::providers::mapterhorn::Mapterhorn;
 use crate::elevation::providers::planetary::PlanetaryDem;
 use crate::elevation::providers::usgs_3dep::Usgs3dep;
+use crate::elevation::providers::jegg500::Jegg500;
 
 /// How the caller wants the elevation source chosen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,7 +72,8 @@ pub fn select_provider(bbox: &LLBBox, mode: SourceMode) -> Box<dyn ElevationProv
 /// Regional providers that beat Mapterhorn in their coverage area, finest first.
 fn build_provider_list() -> Vec<Box<dyn ElevationProvider>> {
     vec![
-        Box::new(Usgs3dep), // 1m 3DEP; Mapterhorn only has 10m for most of the US
+        Box::new(Usgs3dep),// 1m 3DEP; Mapterhorn only has 10m for most of the US
+        Box::new(Jegg500),
     ]
 }
 
