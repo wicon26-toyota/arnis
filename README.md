@@ -138,7 +138,9 @@ cargo run --release --no-default-features -- \
   --bbox="34.0,136.0,35.0,137.0" \
   --jegg500-dir="./jegg500"
 ```
-
+<br><br>
+Wrote by AI
+<br><br>
 ## :copyright: License Information
 Copyright (c) 2022-2026 Louis Erbkamm (louis-e)
 
@@ -163,6 +165,3 @@ The logo was made by @nxfx21.
 NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.
 
 [^3]: https://github.com/louis-e/arnis/blob/main/LICENSE
-  
-
-Wrote by AI
