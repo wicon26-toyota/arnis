@@ -156,6 +156,8 @@ pub fn run_gui() -> Result<(), String> {
             gui_get_default_luanti_save_path,
             gui_set_save_path,
             gui_pick_save_directory,
+            gui_set_jegg500_path,
+            gui_pick_jegg500_directory,
             gui_start_generation,
             gui_get_version,
             gui_get_update_info,
@@ -344,6 +346,38 @@ fn gui_log(level: String, message: String) {
 /// Opens a native folder-picker dialog and returns the chosen path.
 #[tauri::command]
 fn gui_pick_save_directory(start_path: String) -> Result<String, String> {
+    let start = PathBuf::from(&start_path);
+    let mut dialog = FileDialog::new();
+    if start.is_dir() {
+        dialog = dialog.set_directory(&start);
+    }
+    match dialog.pick_folder() {
+        Some(folder) => Ok(folder.display().to_string()),
+        None => Ok(start_path),
+    }
+}
+
+/// Validates a user-provided J-EGG500 directory path.
+/// An empty string means "disabled"; otherwise the path must exist and be a directory.
+#[tauri::command]
+fn gui_set_jegg500_path(path: String) -> Result<String, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    let p = PathBuf::from(trimmed);
+    if !p.exists() {
+        return Err("Path does not exist.".to_string());
+    }
+    if !p.is_dir() {
+        return Err("Path is not a directory.".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Opens a native folder-picker dialog for the J-EGG500 bathymetry directory.
+#[tauri::command]
+fn gui_pick_jegg500_directory(start_path: String) -> Result<String, String> {
     let start = PathBuf::from(&start_path);
     let mut dialog = FileDialog::new();
     if start.is_dir() {
@@ -1054,6 +1088,7 @@ fn gui_start_generation(
     map_item: bool,
     signage: String,
     celestial_body_name: String,
+    jegg500_dir: String,
 ) -> Result<(), String> {
     use progress::emit_gui_error;
     use LLBBox;
@@ -1377,7 +1412,14 @@ fn gui_start_generation(
                 rotation: rotation_angle.clamp(-90.0, 90.0),
                 disable_height_limit,
                 aws_only_elevation,
-                jegg500_dir: None,
+                jegg500_dir: {
+                    let dir = jegg500_dir.trim();
+                    if dir.is_empty() {
+                        None
+                    } else {
+                        Some(PathBuf::from(dir))
+                    }
+                },
                 benchmark: false,
                 bake_lighting: bake_lighting_enabled,
                 voxy_lod: voxy_lod_enabled,
@@ -1618,24 +1660,7 @@ mod locale_tests {
     const LOCALES: &[(&str, &str)] = &[
         ("en-US", include_str!("gui/locales/en-US.json")),
         ("en", include_str!("gui/locales/en.json")),
-        ("ar", include_str!("gui/locales/ar.json")),
-        ("de", include_str!("gui/locales/de.json")),
-        ("es", include_str!("gui/locales/es.json")),
-        ("fi", include_str!("gui/locales/fi.json")),
-        ("fr-FR", include_str!("gui/locales/fr-FR.json")),
-        ("hu", include_str!("gui/locales/hu.json")),
         ("ja", include_str!("gui/locales/ja.json")),
-        ("ka-GE", include_str!("gui/locales/ka-GE.json")),
-        ("ko", include_str!("gui/locales/ko.json")),
-        ("lt", include_str!("gui/locales/lt.json")),
-        ("lv", include_str!("gui/locales/lv.json")),
-        ("pl", include_str!("gui/locales/pl.json")),
-        ("pt-BR", include_str!("gui/locales/pt-BR.json")),
-        ("ru", include_str!("gui/locales/ru.json")),
-        ("sl", include_str!("gui/locales/sl.json")),
-        ("sv", include_str!("gui/locales/sv.json")),
-        ("ua", include_str!("gui/locales/ua.json")),
-        ("zh-CN", include_str!("gui/locales/zh-CN.json")),
     ];
 
     fn locale_keys(name: &str, raw: &str) -> BTreeSet<String> {

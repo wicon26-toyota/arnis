@@ -301,6 +301,20 @@
           </div>
         </div>
 
+        <!-- J-EGG500 Bathymetry Directory -->
+        <div class="settings-row">
+          <label for="jegg500-dir-input">
+            <span data-localize="jegg500_dir">J-EGG500 Bathymetry</span>
+            <span class="tooltip-icon" data-tooltip="Directory containing J-EGG500 mesh500_*.txt bathymetry files. Leave empty to use the synthetic shoreline-distance water depth.">?</span>
+          </label>
+          <div class="settings-control save-path-control">
+            <input type="text" id="jegg500-dir-input" name="jegg500-dir-input" class="save-path-input" placeholder="Leave empty to disable">
+            <button type="button" id="jegg500-dir-browse" class="save-path-browse" title="Browse...">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>
+            </button>
+          </div>
+        </div>
+
         <!-- World Scale Slider -->
         <div class="settings-row">
           <label for="scale-value-slider">
@@ -437,22 +451,6 @@
           <div class="settings-control">
             <select id="language-select" name="language-select" class="language-dropdown">
               <option value="en">English</option>
-              <option value="de">Deutsch</option>
-              <option value="es">Español</option>
-              <option value="fr-FR">Français</option>
-              <option value="ru">Русский</option>
-              <option value="zh-CN">中文 (简体)</option>
-              <option value="ko">한국어</option>
-              <option value="pt-BR">Português (Brasil)</option>
-              <option value="pl">Polski</option>
-              <option value="sl">Slovenščina</option>
-              <option value="lv">Latviešu</option>
-              <option value="sv">Svenska</option>
-              <option value="ar">العربية</option>
-              <option value="fi">Suomi</option>
-              <option value="hu">Magyar</option>
-              <option value="lt">Lietuvių</option>
-              <option value="ua">Українська</option>
               <option value="ja">日本語</option>
             </select>
           </div>

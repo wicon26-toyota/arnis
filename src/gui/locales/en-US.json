@@ -65,6 +65,7 @@
   "three_dmr": "3D Models & Props",
   "disable_height_limit": "Extend build height",
   "aws_only_elevation": "Legacy terrain",
+  "jegg500_dir": "J-EGG500 Bathymetry",
   "bake_lighting": "Bake lighting",
   "voxy_lod": "Pre-generate Voxy LOD",
   "bedrock_auto_generated": "Bedrock world is auto-generated",

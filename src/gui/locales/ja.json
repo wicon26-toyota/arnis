@@ -58,6 +58,7 @@
   "three_dmr": "3Dモデルを使用",
   "disable_height_limit": "建築高さを拡張",
   "aws_only_elevation": "従来の地形",
+  "jegg500_dir": "J-EGG500 海底地形",
   "bake_lighting": "ライティングをベイク",
   "voxy_lod": "Voxy LODを事前生成",
   "bedrock_auto_generated": "Bedrock ワールドは自動生成されます",

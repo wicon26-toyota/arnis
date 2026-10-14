@@ -1022,6 +1022,9 @@ function initSettings() {
   // Save path setting
   initSavePathSetting();
 
+  // J-EGG500 bathymetry directory setting
+  initJegg500Setting();
+
   // Language selector
   const languageSelect = document.getElementById("language-select");
   const availableOptions = Array.from(languageSelect.options).map(opt => opt.value);
@@ -1571,6 +1574,7 @@ function initTooltips() {
 let savePath = "";
 let bedrockSavePath = "";
 let luantiSavePath = "";
+let jegg500Dir = "";
 
 const SAVE_PATHS = {
   java: {
@@ -1677,6 +1681,48 @@ function initSavePathRow({ storageKey, inputId, browseId, get, set }) {
         }
       } catch (error) {
         console.error("Folder picker failed:", error);
+      }
+    });
+  }
+}
+
+const JEGG500_STORAGE_KEY = 'arnis-jegg500-dir';
+
+function initJegg500Setting() {
+  const input = document.getElementById('jegg500-dir-input');
+  const browseBtn = document.getElementById('jegg500-dir-browse');
+  if (!input) return;
+
+  // Restore saved path, if any.
+  const saved = localStorage.getItem(JEGG500_STORAGE_KEY);
+  if (saved !== null) {
+    jegg500Dir = saved;
+    input.value = saved;
+  }
+
+  input.addEventListener('change', async () => {
+    const newPath = input.value.trim();
+    try {
+      const validated = await invoke('gui_set_jegg500_path', { path: newPath });
+      jegg500Dir = validated;
+      input.value = validated;
+      localStorage.setItem(JEGG500_STORAGE_KEY, validated);
+    } catch (_) {
+      input.value = jegg500Dir;
+    }
+  });
+
+  if (browseBtn) {
+    browseBtn.addEventListener('click', async () => {
+      try {
+        const picked = await invoke('gui_pick_jegg500_directory', { startPath: jegg500Dir });
+        if (picked) {
+          jegg500Dir = picked;
+          input.value = picked;
+          localStorage.setItem(JEGG500_STORAGE_KEY, picked);
+        }
+      } catch (error) {
+        console.error("J-EGG500 folder picker failed:", error);
       }
     });
   }
@@ -2107,7 +2153,8 @@ async function startGeneration() {
         worldTime: worldTime,
         mapItem: mapItem,
         signage: signage,
-        celestialBodyName: selectedCelestialBody
+        celestialBodyName: selectedCelestialBody,
+        jegg500Dir: jegg500Dir
     });
 
     console.log("Generation process started.");

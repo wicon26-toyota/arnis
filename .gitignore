@@ -13,6 +13,7 @@
 .idea/
 /.vscode/
 .claude/
+.qwen/
 /*.swp
 *.iml
 *.suo
@@ -52,3 +53,6 @@ gen/
 /flake/*
 !/flake/flake.nix
 !/flake/flake.lock
+
+
+jegg500/
