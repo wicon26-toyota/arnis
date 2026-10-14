@@ -1,112 +1,142 @@
-<img src="assets/git/banner.png" width="100%" alt="Banner">
+# Arnis
 
-# Arnis [![CI Build Status](https://github.com/louis-e/arnis/actions/workflows/ci-build.yml/badge.svg)](https://github.com/louis-e/arnis/actions) [<img alt="GitHub Release" src="https://img.shields.io/github/v/release/louis-e/arnis" />](https://github.com/louis-e/arnis/releases) [<img alt="GitHub Downloads (all assets, all releases" src="https://img.shields.io/github/downloads/louis-e/arnis/total" />](https://github.com/louis-e/arnis/releases) [![Download here](https://img.shields.io/badge/Download-here-green)](https://github.com/louis-e/arnis/releases) [![Discord](https://img.shields.io/discord/1326192999738249267?label=Discord&color=%237289da)](https://discord.gg/mA2g69Fhxq)
+Arnis は、OpenStreetMap の地理データと標高データ、およびこのブランチでは J-EGG500 の海底地形データを組み合わせて、Minecraft Java Edition / Bedrock Edition、Luanti（Minetest）向けのワールドを生成するツールです。
 
-Arnis creates complex and accurate Minecraft Java Edition (1.17+), Bedrock Edition, and Luanti (Minetest) worlds that reflect real-world geography, topography, and architecture.
+このリポジトリは **`feature/jegg500-bathymetry`** ブランチです。日本周辺の海域で実測に基づく水深を反映する J-EGG500 対応が入っています。
 
-This free and open source project is designed to handle large-scale geographic data from the real world and generate detailed Minecraft worlds. The algorithm processes geospatial data from OpenStreetMap as well as elevation data to create an accurate Minecraft representation of terrain and architecture.
-Generate your hometown, big cities, and natural landscapes with ease!
+## 必要な環境
 
-_**Want mobile generation or larger map sizes?** [MapSmith](https://arnismc.com/mapsmith/) generates worlds in your browser, no install required._
+- [Rust](https://www.rust-lang.org/tools/install)（stable toolchain）
+- 各 OS のビルド依存関係
 
-![Minecraft Preview](assets/git/preview.jpg)
-<i>This GitHub page and [arnismc.com](https://arnismc.com) are the only official project websites. Do not download Arnis from any other website.</i>
+### Linux
 
-## :keyboard: Usage
-<img width="60%" src="assets/git/gui.png"><br>
-Download the [latest release](https://github.com/louis-e/arnis/releases/) or [compile](#trophy-open-source) the project on your own.
+Tauri / WebKitGTK ベースの GUI をビルドするため、以下のようなパッケージが必要です。ディストリビューションによってパッケージ名は異なります。
 
-Choose your area on the map using the rectangle tool and select your Minecraft world - then simply click on <i>Start Generation</i>!
-Additionally, you can customize various generation settings, such as world scale, spawn point, or building interior generation.
+- `pkg-config`
+- `libssl-dev` / `openssl-devel`
+- `libgtk-3-dev`
+- `libwebkit2gtk-4.1-dev`
+- `libjavascriptcoregtk-4.1-dev`
+- `libsoup-3.0-dev`
+- `libglib2.0-dev`
+- `libcairo2-dev`
+- `libpango1.0-dev`
+- `libgdk-pixbuf-2.0-dev`
+- `libwayland-dev`
 
-## 📚 Documentation
+Nix を使う場合は `flake.nix` にこれらの依存関係が定義されています。
 
-<img src="assets/git/documentation.png" width="100%" alt="Banner">
+### Windows
 
-Full documentation is available in the [GitHub Wiki](https://github.com/louis-e/arnis/wiki/), covering topics such as technical explanations, FAQs, contribution guidelines and roadmaps.
+- [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) または Visual Studio（C++ 用ワークロード）
+- Rust の MSVC toolchain
 
-[backgroundvid.webm](https://github.com/user-attachments/assets/420acc19-a850-418e-8397-1a45b05582ab)
+### macOS
 
-## :trophy: Open Source
-#### Key objectives of this project
-- **Modularity**: Ensure that all components (e.g., data fetching, processing, and world generation) are cleanly separated into distinct modules for better maintainability and scalability.
-- **Performance Optimization**: We aim to maintain strong performance and fast world generation.
-- **Comprehensive Documentation**: Detailed in-code documentation for a clear structure and logic.
-- **User-Friendly Experience**: Focus on making the project easy to use for end users.
-- **Cross-Platform Support**: We want this project to run smoothly on Windows, macOS, and Linux.
+- Xcode Command Line Tools
 
-#### How to contribute
-This project is open source and welcomes contributions from everyone! Whether you're interested in fixing bugs, improving performance, adding new features, or enhancing documentation, your input is valuable. Simply fork the repository, make your changes, and submit a pull request. Please respect the above-mentioned key objectives. Contributions of all levels are appreciated, and your efforts help improve this tool for everyone.
+## セットアップ
 
-Command line Build: ```cargo run --release --no-default-features -- --output-dir="C:/YOUR_PATH/.minecraft/saves/worldname" --bbox="min_lat,min_lng,max_lat,max_lng"```<br>
-GUI Build: ```cargo run --release```<br>
+```bash
+# リポジトリをクローン
+git clone https://github.com/louis-e/arnis.git
+cd arnis
 
-`--mode` selects what gets generated, mirroring the GUI's generation mode dropdown:
+# 依存関係を取得
+cargo fetch
+```
 
-| Mode | Result |
+## ビルドと実行
+
+### GUI 版
+
+```bash
+cargo run --release
+```
+
+ブラウザベースの UI が起動します。マップ上で範囲を選択し、出力先のワールドフォルダを指定して **Start Generation** を押してください。
+
+### CLI 版
+
+GUI 機能を無効にして軽量な CLI バイナリをビルドします。
+
+```bash
+cargo run --release --no-default-features -- \
+  --output-dir="C:/Users/USER/AppData/Roaming/.minecraft/saves/worldname" \
+  --bbox="min_lat,min_lng,max_lat,max_lng"
+```
+
+`--bbox` は生成する範囲を `南西緯,南西経,北東緯,北東経` で指定します。例：
+
+```bash
+cargo run --release --no-default-features -- \
+  --output-dir="$HOME/.minecraft/saves/tokyo-bay" \
+  --bbox="35.55,139.65,35.75,139.90"
+```
+
+主要なオプション：
+
+| オプション | 説明 |
 | --- | --- |
-| `geo-terrain` (default) | Buildings, roads and other OSM objects on real elevation terrain |
-| `geo-only` | OSM objects on flat ground |
-| `terrain-only` | Real elevation terrain, no objects at all (skips the OpenStreetMap query and the Overture fetch entirely, so `--overture` has no effect) |
+| `--output-dir` | 生成したワールドを出力するディレクトリ |
+| `--bbox` | 生成範囲（`min_lat,min_lng,max_lat,max_lng`） |
+| `--mode` | `geo-terrain`（標高＋OSM、デフォルト） / `geo-only`（平坦＋OSM） / `terrain-only`（標高のみ） |
+| `--scale` | ワールドスケール（1.0 = 実寸） |
+| `--bedrock` | Bedrock Edition 用 `.mcworld` を生成 |
+| `--luanti` | Luanti（Minetest）用 `map.sqlite` を生成 |
+| `--jegg500-dir` | J-EGG500 データディレクトリを指定 |
 
-After your pull request is merged, I will take care of regularly creating update releases which will include your changes.
+### Nix で実行
 
-If you are using Nix, you can run the program directly with `nix run github:louis-e/arnis -- --output-dir=YOUR_PATH/.minecraft/saves/worldname --bbox="min_lat,min_lng,max_lat,max_lng"`
+```bash
+nix run github:louis-e/arnis -- \
+  --output-dir="$HOME/.minecraft/saves/worldname" \
+  --bbox="min_lat,min_lng,max_lat,max_lng"
+```
 
-## :star: Star History
+## J-EGG500 海底地形データの利用
 
-<a href="https://star-history.com/#louis-e/arnis&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=louis-e/arnis&Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=louis-e/arnis&Date&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=louis-e/arnis&Date&type=Date" />
- </picture>
-</a>
+このブランチでは、日本周辺の海域で実測水深を反映できるよう、J-EGG500（500 m メッシュの海底地形データ）に対応しています。
 
-## :newspaper: Academic & Press Recognition
+### 1. データをダウンロードする
 
-<img src="assets/git/recognition.png" width="100%" alt="Banner">
+海洋情報部（J-EGG500）のページから、必要なタイルをダウンロードしてください。
 
-Arnis has been recognized in various academic and press publications after gaining more attention in December 2024.
+[https://www.jodc.go.jp/vpage/depth500_file_j.html](https://www.jodc.go.jp/vpage/depth500_file_j.html)
 
-[Building realistic Minecraft worlds with Open Data on AWS: How Arnis uses elevation datasets at scale](https://aws.amazon.com/de/blogs/publicsector/building-realistic-minecraft-worlds-with-open-data-on-aws-how-arnis-uses-elevation-datasets-at-scale/)
+ファイル名は `mesh500_<lat>_<lon>.txt` の形式になっています。緯度・経度は整数度のタイル単位です。
 
-[Floodcraft: Game-based Interactive Learning Environment using Minecraft for Flood Mitigation and Preparedness for K-12 Education](https://www.researchgate.net/publication/384644535_Floodcraft_Game-based_Interactive_Learning_Environment_using_Minecraft_for_Flood_Mitigation_and_Preparedness_for_K-12_Education)
+### 2. データを配置する
 
-[Hackaday: Bringing OpenStreetMap Data into Minecraft](https://hackaday.com/2024/12/30/bringing-openstreetmap-data-into-minecraft/)
+リポジトリ内の `jegg500/` ディレクトリ、または任意のディレクトリにダウンロードした `mesh500_*.txt` ファイルを配置します。
 
-[TomsHardware: Minecraft Tool Lets You Create Scale Replicas of Real-World Locations](https://www.tomshardware.com/video-games/pc-gaming/minecraft-tool-lets-you-create-scale-replicas-of-real-world-locations-arnis-uses-geospatial-data-from-openstreetmap-to-generate-minecraft-maps)
+例: 
+```text
+jegg500/
+├── mesh500_34_136.txt
+├── mesh500_34_137.txt
+├── mesh500_35_136.txt
+└── ...
+```
 
-[XDA Developers: Hometown Minecraft Map: Arnis](https://www.xda-developers.com/hometown-minecraft-map-arnis/)
+生成範囲に含まれるタイルが自動的に読み込まれます。一部のタイルが欠けていても、データがない海域は従来の海岸線距離に基づく水深でフォールバックします。
 
-Free to use press assets, including screenshots and logos, can be found [here](https://arnismc.com/presskit/).
+### 3. 生成時にディレクトリを指定する
 
-## :copyright: License Information
-Copyright (c) 2022-2026 Louis Erbkamm (louis-e)
+#### GUI の場合
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+Settings の **J-EGG500 海底地形** 欄で、データを配置したディレクトリを選択してください。空欄の場合は J-EGG500 を使用せず、従来の shoreline-distance ベースの水深になります。
 
-http://www.apache.org/licenses/LICENSE-2.0
+#### CLI の場合
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.[^3]
+`--jegg500-dir` でディレクトリを指定します。
 
-The Luanti block-name mapping in `src/luanti_block_map.rs` is derived from [MC2MT](https://github.com/rollerozxa/MC2MT) by rollerozxa and is licensed under the GNU Lesser General Public License v2.1 or later. The full attribution and license header are preserved in that file.
+```bash
+cargo run --release --no-default-features -- \
+  --output-dir="$HOME/.minecraft/saves/worldname" \
+  --bbox="34.0,136.0,35.0,137.0" \
+  --jegg500-dir="./jegg500"
+```
 
-Download Arnis only from the official source https://arnismc.com or https://github.com/louis-e/arnis/. Every other website providing a download and claiming to be affiliated with the project is unofficial and may be malicious.
-
-The logo was made by @nxfx21.
-
-NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.
-
-
-[^1]: https://en.wikipedia.org/wiki/OpenStreetMap
-
-[^2]: https://en.wikipedia.org/wiki/Arnis,_Germany
-
-[^3]: https://github.com/louis-e/arnis/blob/main/LICENSE
+Wrote by AI
