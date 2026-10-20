@@ -369,6 +369,17 @@
           </div>
         </div>
 
+        <!-- J-EGG500 Interpolation Toggle -->
+        <div class="settings-row">
+          <label for="jegg500-interpolation-toggle">
+            <span data-localize="jegg500_interpolation">Smooth Bathymetry Interpolation</span>
+            <span class="tooltip-icon" data-tooltip="Bilinearly blend between adjacent J-EGG500 cells for a smooth seabed. Turn off to use the nearest 500 m cell value instead; this keeps the original terraces but never invents depth between samples.">?</span>
+          </label>
+          <div class="settings-control">
+            <input type="checkbox" id="jegg500-interpolation-toggle" name="jegg500-interpolation-toggle" checked>
+          </div>
+        </div>
+
         <!-- Legacy Water Depth Toggle -->
         <div class="settings-row">
           <label for="legacy-water-depth-toggle">

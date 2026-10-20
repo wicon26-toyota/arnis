@@ -67,6 +67,7 @@
   "aws_only_elevation": "Legacy terrain",
   "jegg500_enabled": "J-EGG500 Bathymetry",
   "jegg500_dir": "J-EGG500 Data Directory",
+  "jegg500_interpolation": "Smooth Bathymetry Interpolation",
   "legacy_water_depth": "Legacy Water Depth",
   "bake_lighting": "Bake lighting",
   "voxy_lod": "Pre-generate Voxy LOD",

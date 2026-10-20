@@ -504,6 +504,33 @@ body,
   opacity: 0;
 }
 
+/* Legend for the J-EGG500 tile coverage overlay in the map iframe. */
+.jegg-coverage-legend {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #9aa7a3;
+  border-radius: 3px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  color: #24332f;
+  font: 12px/1.4 'Helvetica Neue', Helvetica, sans-serif;
+  padding: 5px 8px;
+  white-space: nowrap;
+}
+
+.jegg-coverage-swatch {
+  background: rgba(38, 166, 154, 0.18);
+  border: 1px solid #00796b;
+  display: inline-block;
+  height: 9px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  width: 14px;
+}
+
+.jegg-coverage-count {
+  color: #53635f;
+  margin-left: 6px;
+}
+
 /* Always-on bbox drag handles: plain white rectangles with a thin dark outline */
 .bbox-handle {
   background: #ffffff;

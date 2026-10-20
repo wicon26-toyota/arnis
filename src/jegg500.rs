@@ -54,7 +54,6 @@ pub enum JeggInterpolation {
     /// Use the depth of the J-EGG500 cell that contains the Minecraft block.
     /// This matches the 500 m native resolution and avoids inventing values
     /// across data gaps, but leaves 500 m terraces between cells.
-    #[allow(dead_code)]
     NearestCell,
     /// Bilinearly blend between adjacent J-EGG500 cell centres. This removes
     /// the 500 m terraces while still returning the measured value at each
@@ -87,7 +86,6 @@ pub struct Jegg500Config {
 impl Jegg500Config {
     /// Sets the interpolation method. `Bilinear` is the default; `NearestCell`
     /// reproduces the pre-interpolation 500 m terraces.
-    #[allow(dead_code)]
     pub fn with_interpolation(mut self, interpolation: JeggInterpolation) -> Self {
         self.interpolation = interpolation;
         self
@@ -518,6 +516,10 @@ mod tests {
     fn config_builder_accepts_interpolation() {
         let config = Jegg500Config::new("/tmp").with_interpolation(JeggInterpolation::NearestCell);
         assert_eq!(config.interpolation, JeggInterpolation::NearestCell);
+        assert_eq!(
+            BathymetryInterpolation::from(config.interpolation),
+            BathymetryInterpolation::Nearest
+        );
     }
 
     #[test]

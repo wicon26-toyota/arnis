@@ -1,4 +1,7 @@
 var map, rsidebar, lsidebar, drawControl, drawnItems = null;
+var jegg500CoverageLayer = null;
+var jegg500CoverageLegend = null;
+var jegg500CoverageLegendVisible = false;
 
 // logging.js defines this. The guard keeps a problem in the diagnostics path
 // from turning into a broken map, which is the very failure mode it reports on.
@@ -15,7 +18,7 @@ var currentmouse = L.latLng(0, 0);
 
 /*
 **
-**  override L.Rectangle 
+**  override L.Rectangle
 **  to fire an event after setting
 **
 **  the base parent object L.Path
@@ -141,7 +144,7 @@ var FormatSniffer = (function () {  // execute immediately
                 next = false;
             }
 
-            // try normal bbox 
+            // try normal bbox
             if (next) {
                 parsed_data = this._is_normal_bbox();
                 if (parsed_data.length > 0) next = false;
@@ -162,7 +165,7 @@ var FormatSniffer = (function () {  // execute immediately
             // no matches, throw error
             if (next) {
                 fail = true;
-                /* 
+                /*
                 **  sorry, this block needs to be left aligned
                 **  to make the alert more readable
                 **  which means, we probably shouldn't use alerts ;-)
@@ -202,7 +205,7 @@ var FormatSniffer = (function () {  // execute immediately
     **  we can do so here as a property name
     **  to enforce reusability
     **
-    **  to add different formats as L.FeatureGroup layer 
+    **  to add different formats as L.FeatureGroup layer
     **  so they work with L.Draw edit and delete options
     **  we fake passing event information
     **  and triggering draw:created for L.Draw
@@ -438,6 +441,79 @@ function formatPoint(point, proj) {
     return formattedPoint
 }
 
+// Draw the 1° tile grid reported by the parent's selected J-EGG500 directory.
+// The rectangles are non-interactive and are kept behind the bbox selection
+// shapes in the shared overlay renderer.
+function updateJegg500CoverageLegend(count) {
+    if (!jegg500CoverageLegend) {
+        jegg500CoverageLegend = L.control({ position: 'bottomleft' });
+        jegg500CoverageLegend.onAdd = function () {
+            var div = L.DomUtil.create('div', 'jegg-coverage-legend');
+            div.innerHTML = '<span class="jegg-coverage-swatch"></span>' +
+                '<span>J-EGG500</span><span class="jegg-coverage-count"></span>';
+            return div;
+        };
+    }
+
+    if (count > 0) {
+        if (!jegg500CoverageLegendVisible) {
+            jegg500CoverageLegend.addTo(map);
+            jegg500CoverageLegendVisible = true;
+        }
+        var container = jegg500CoverageLegend.getContainer();
+        var countNode = container ? container.querySelector('.jegg-coverage-count') : null;
+        if (countNode) countNode.textContent = ' (' + count + ')';
+    } else if (jegg500CoverageLegendVisible) {
+        jegg500CoverageLegend.remove();
+        jegg500CoverageLegendVisible = false;
+    }
+}
+
+function setJegg500Coverage(tiles) {
+    if (!map) return;
+
+    if (!jegg500CoverageLayer) {
+        jegg500CoverageLayer = L.featureGroup().addTo(map);
+    }
+
+    jegg500CoverageLayer.clearLayers();
+    if (!Array.isArray(tiles) || tiles.length === 0) {
+        updateJegg500CoverageLegend(0);
+        return;
+    }
+
+    var rectangles = [];
+    for (var i = 0; i < tiles.length; i++) {
+        var tile = tiles[i];
+        if (!tile ||
+            !isFinite(tile.min_lat) || !isFinite(tile.min_lon) ||
+            !isFinite(tile.max_lat) || !isFinite(tile.max_lon) ||
+            tile.min_lat >= tile.max_lat || tile.min_lon >= tile.max_lon) {
+            continue;
+        }
+        rectangles.push(L.rectangle(
+            [[tile.min_lat, tile.min_lon], [tile.max_lat, tile.max_lon]],
+            {
+                color: '#00796b',
+                weight: 1.25,
+                opacity: 0.85,
+                fillColor: '#26a69a',
+                fillOpacity: 0.08,
+                dashArray: '5 4',
+                interactive: false
+            }
+        ));
+    }
+
+    for (var r = 0; r < rectangles.length; r++) {
+        jegg500CoverageLayer.addLayer(rectangles[r]);
+    }
+    if (rectangles.length > 0) {
+        jegg500CoverageLayer.bringToBack();
+    }
+    updateJegg500CoverageLegend(rectangles.length);
+}
+
 function validateStringAsBounds(bounds) {
     var splitBounds = bounds ? bounds.split(',') : null;
     return ((splitBounds !== null) &&
@@ -451,14 +527,14 @@ function validateStringAsBounds(bounds) {
 }
 
 $(document).ready(function () {
-    /* 
+    /*
     **
     **  make sure all textarea inputs
     **  are selected once they are clicked
-    **  because some people might not 
+    **  because some people might not
     **  have flash enabled or installed
     **  and yes...
-    **  there's a fucking Flash movie floating 
+    **  there's a fucking Flash movie floating
     **  on top of your DOM
     **
     */
@@ -467,8 +543,8 @@ $(document).ready(function () {
     $('input[type="textarea"]').on('click', function (evt) { this.select() });
     $("#projection").val(currentproj);
 
-    // Initialize map
-    map = L.map('map', { zoomControl: false }).setView([50.114768, 8.687322], 4);
+    // Initialize map  (JP)
+    map = L.map('map', { zoomControl: false }).setView([35, 137], 6);
 
     // Define available tile themes
     var tileThemes = {
@@ -1180,7 +1256,7 @@ $(document).ready(function () {
         var data = worldOverlayData;
 
         // Check if Minecraft coordinate bounds are available (not all zeros)
-        if (data.min_mc_x === 0 && data.max_mc_x === 0 && 
+        if (data.min_mc_x === 0 && data.max_mc_x === 0 &&
             data.min_mc_z === 0 && data.max_mc_z === 0) {
             return null;
         }
@@ -1252,7 +1328,7 @@ $(document).ready(function () {
     function hasMinecraftCoords() {
         if (!worldOverlayData) return false;
         var data = worldOverlayData;
-        return !(data.min_mc_x === 0 && data.max_mc_x === 0 && 
+        return !(data.min_mc_x === 0 && data.max_mc_x === 0 &&
                  data.min_mc_z === 0 && data.max_mc_z === 0);
     }
 
@@ -1336,6 +1412,11 @@ $(document).ready(function () {
         // Earth / Moon / Mars picked in the settings modal
         if (event.data && event.data.type === 'changeBody') {
             changeBody(event.data.body);
+        }
+
+        // J-EGG500 tiles in the selected data directory
+        if (event.data && event.data.type === 'setJegg500Coverage') {
+            setJegg500Coverage(event.data.tiles);
         }
 
         // Handle world preview data ready (after generation completes)
@@ -1920,14 +2001,14 @@ $(document).ready(function () {
             // Calculate bounds only from non-marker layers
             const nonMarkerBounds = new L.LatLngBounds();
             let hasNonMarkerLayers = false;
-            
+
             drawnItems.eachLayer(function(layer) {
                 if (!(layer instanceof L.Marker)) {
                     hasNonMarkerLayers = true;
                     nonMarkerBounds.extend(layer.getBounds());
                 }
             });
-            
+
             // Only update bounds if there are non-marker layers
             if (hasNonMarkerLayers) {
                 bounds.setBounds(nonMarkerBounds);
@@ -1988,19 +2069,19 @@ $(document).ready(function () {
         // Calculate bounds only from non-marker layers
         const nonMarkerBounds = new L.LatLngBounds();
         let hasNonMarkerLayers = false;
-        
+
         drawnItems.eachLayer(function(layer) {
             if (!(layer instanceof L.Marker)) {
                 hasNonMarkerLayers = true;
                 nonMarkerBounds.extend(layer.getBounds());
             }
         });
-        
+
         // Only update bounds if there are non-marker layers
         if (hasNonMarkerLayers) {
             bounds.setBounds(nonMarkerBounds);
         }
-        
+
         $('#boxbounds').text(formatBounds(bounds.getBounds(), '4326'));
         $('#boxboundsmerc').text(formatBounds(bounds.getBounds(), currentproj));
         notifyBboxUpdate();

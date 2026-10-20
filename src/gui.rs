@@ -158,6 +158,7 @@ pub fn run_gui() -> Result<(), String> {
             gui_pick_save_directory,
             gui_set_jegg500_path,
             gui_pick_jegg500_directory,
+            gui_list_jegg500_tiles,
             gui_start_generation,
             gui_get_version,
             gui_get_update_info,
@@ -387,6 +388,77 @@ fn gui_pick_jegg500_directory(start_path: String) -> Result<String, String> {
         Some(folder) => Ok(folder.display().to_string()),
         None => Ok(start_path),
     }
+}
+
+/// A 1° × 1° J-EGG500 tile that exists in the configured directory.
+#[derive(serde::Serialize)]
+struct Jegg500TileBounds {
+    min_lat: i32,
+    min_lon: i32,
+    max_lat: i32,
+    max_lon: i32,
+    file_name: String,
+}
+
+/// Parse `mesh500_<lat>_<lon>.txt`. The integer pair is the south-west corner
+/// of the 1° tile, matching the filename convention used by the loader.
+fn parse_jegg500_tile_name(file_name: &str) -> Option<(i32, i32)> {
+    let stem = file_name.strip_prefix("mesh500_")?.strip_suffix(".txt")?;
+    let (lat, lon) = stem.split_once('_')?;
+    if lon.contains('_') {
+        return None;
+    }
+    let lat: i32 = lat.parse().ok()?;
+    let lon: i32 = lon.parse().ok()?;
+    if !(-90..90).contains(&lat) || !(-180..180).contains(&lon) {
+        return None;
+    }
+    Some((lat, lon))
+}
+
+/// Lists the J-EGG500 tiles present in the selected directory for the map
+/// coverage overlay. Only filenames are inspected; tile contents are not read.
+#[tauri::command]
+fn gui_list_jegg500_tiles(path: String) -> Result<Vec<Jegg500TileBounds>, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let dir = PathBuf::from(trimmed);
+    if !dir.exists() {
+        return Err("Path does not exist.".to_string());
+    }
+    if !dir.is_dir() {
+        return Err("Path is not a directory.".to_string());
+    }
+
+    let entries = fs::read_dir(&dir)
+        .map_err(|e| format!("Failed to read J-EGG500 directory {}: {e}", dir.display()))?;
+    let mut tiles = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read J-EGG500 directory entry: {e}"))?;
+        if !entry.path().is_file() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        let Some((min_lat, min_lon)) = parse_jegg500_tile_name(file_name) else {
+            continue;
+        };
+        tiles.push(Jegg500TileBounds {
+            min_lat,
+            min_lon,
+            max_lat: min_lat + 1,
+            max_lon: min_lon + 1,
+            file_name: file_name.to_string(),
+        });
+    }
+
+    tiles.sort_by_key(|tile| (tile.min_lat, tile.min_lon));
+    Ok(tiles)
 }
 
 /// Creates a new Java Edition world in the given base save directory.
@@ -1089,6 +1161,7 @@ fn gui_start_generation(
     signage: String,
     celestial_body_name: String,
     jegg500_enabled: bool,
+    jegg500_interpolation: bool,
     legacy_water_depth_enabled: bool,
     jegg500_dir: String,
 ) -> Result<(), String> {
@@ -1415,6 +1488,7 @@ fn gui_start_generation(
                 disable_height_limit,
                 aws_only_elevation,
                 jegg500_enabled,
+                jegg500_interpolation,
                 legacy_water_depth: legacy_water_depth_enabled,
                 jegg500_dir: {
                     let dir = jegg500_dir.trim();
@@ -1653,6 +1727,44 @@ mod generation_slot_tests {
             GenerationSlot::acquire().is_some(),
             "the slot must be free again once the first generation finishes"
         );
+    }
+}
+
+#[cfg(test)]
+mod jegg_tile_tests {
+    use super::{gui_list_jegg500_tiles, parse_jegg500_tile_name};
+
+    #[test]
+    fn parses_positive_and_negative_tile_names() {
+        assert_eq!(
+            parse_jegg500_tile_name("mesh500_34_136.txt"),
+            Some((34, 136))
+        );
+        assert_eq!(
+            parse_jegg500_tile_name("mesh500_-34_-136.txt"),
+            Some((-34, -136))
+        );
+        assert_eq!(parse_jegg500_tile_name("mesh500_34_136.TXT"), None);
+        assert_eq!(parse_jegg500_tile_name("mesh500_34_136.csv"), None);
+        assert_eq!(parse_jegg500_tile_name("mesh500_34_136_extra.txt"), None);
+        assert_eq!(parse_jegg500_tile_name("mesh500_90_136.txt"), None);
+        assert_eq!(parse_jegg500_tile_name("mesh500_34_180.txt"), None);
+    }
+
+    #[test]
+    fn lists_only_matching_files_sorted_by_tile() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("mesh500_35_137.txt"), "").unwrap();
+        std::fs::write(dir.path().join("mesh500_34_136.txt"), "").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "").unwrap();
+        std::fs::create_dir(dir.path().join("mesh500_36_138.txt")).unwrap();
+
+        let tiles = gui_list_jegg500_tiles(dir.path().display().to_string()).unwrap();
+        let bounds: Vec<(i32, i32, i32, i32)> = tiles
+            .iter()
+            .map(|tile| (tile.min_lat, tile.min_lon, tile.max_lat, tile.max_lon))
+            .collect();
+        assert_eq!(bounds, vec![(34, 136, 35, 137), (35, 137, 36, 138)]);
     }
 }
 

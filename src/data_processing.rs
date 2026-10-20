@@ -6,7 +6,7 @@ use crate::element_processing::*;
 use crate::floodfill_cache::{CoordinateBitmap, FloodFillCache};
 use crate::ground::Ground;
 use crate::ground_generation;
-use crate::jegg500::{self, Jegg500Config};
+use crate::jegg500::{self, Jegg500Config, JeggInterpolation};
 use crate::map_preview;
 use crate::map_renderer::PreviewAccumulator;
 use crate::osm_parser::{
@@ -658,7 +658,12 @@ pub fn generate_world_with_options(
     };
 
     let big_water_field = if let Some(dir) = jegg500_dir {
-        let config = Jegg500Config::new(dir);
+        let interpolation = if args.jegg500_interpolation {
+            JeggInterpolation::Bilinear
+        } else {
+            JeggInterpolation::NearestCell
+        };
+        let config = Jegg500Config::new(dir).with_interpolation(interpolation);
         match jegg500::load_jegg500_for_bbox(&config, &llbbox, args.scale, args.rotation) {
             Ok(Some(bathymetry)) => {
                 if args.legacy_water_depth {

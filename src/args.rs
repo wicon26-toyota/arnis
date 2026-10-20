@@ -153,6 +153,12 @@ pub struct Args {
     #[arg(long = "no-jegg500-bathymetry", default_value_t = true, action = ArgAction::SetFalse)]
     pub jegg500_enabled: bool,
 
+    /// Bilinearly interpolate between adjacent J-EGG500 cells for a smooth
+    /// seabed. Enabled by default; `--no-jegg500-interpolation` samples the
+    /// nearest 500 m cell instead, keeping the original terraces.
+    #[arg(long = "no-jegg500-interpolation", default_value_t = true, action = ArgAction::SetFalse)]
+    pub jegg500_interpolation: bool,
+
     /// Generate synthetic shoreline-distance water depth where J-EGG500 data is
     /// unavailable. Enabled by default; `--no-legacy-water-depth` leaves those
     /// cells flat instead.
@@ -695,6 +701,7 @@ mod tests {
         assert!(!args.voxy_lod);
         assert!(!args.map_preview);
         assert!(args.jegg500_enabled);
+        assert!(args.jegg500_interpolation);
         assert!(args.legacy_water_depth);
         assert_eq!(args.signage, SignageLevel::Basic);
         let cmd = [
@@ -787,6 +794,27 @@ mod tests {
         let args = Args::parse_from(cmd.iter());
         assert!(!args.jegg500_enabled);
         assert!(!args.legacy_water_depth);
+    }
+
+    #[test]
+    fn jegg500_interpolation_can_be_disabled() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp_path = tmpdir.path().to_str().unwrap();
+
+        let cmd = ["arnis", "--output-dir", tmp_path, "--bbox", "1,2,3,4"];
+        let args = Args::parse_from(cmd.iter());
+        assert!(args.jegg500_interpolation);
+
+        let cmd = [
+            "arnis",
+            "--output-dir",
+            tmp_path,
+            "--bbox",
+            "1,2,3,4",
+            "--no-jegg500-interpolation",
+        ];
+        let args = Args::parse_from(cmd.iter());
+        assert!(!args.jegg500_interpolation);
     }
 
     #[test]

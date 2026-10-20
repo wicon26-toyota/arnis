@@ -139,6 +139,7 @@ async function applyLocalization(localization) {
     "span[data-localize='voxy_lod']": "voxy_lod",
     "span[data-localize='jegg500_enabled']": "jegg500_enabled",
     "span[data-localize='jegg500_dir']": "jegg500_dir",
+    "span[data-localize='jegg500_interpolation']": "jegg500_interpolation",
     "span[data-localize='legacy_water_depth']": "legacy_water_depth",
     "span[data-localize='anonymous_crash_reports']": "anonymous_crash_reports",
     "span[data-localize='map_theme']": "map_theme",
@@ -421,6 +422,7 @@ const EARTH_ONLY_SETTINGS = [
   'jegg500-enabled-toggle',
   'jegg500-dir-input',
   'jegg500-dir-browse',
+  'jegg500-interpolation-toggle',
   'legacy-water-depth-toggle',
   // Off Earth the body's own imagery is the only basemap, so neither the
   // Earth theme picker nor a custom Earth tile source has anything to act on.
@@ -495,6 +497,7 @@ function setCelestialBody(body) {
 
   // The J-EGG500 directory input is also gated by its own toggle, not just Earth.
   refreshJegg500Controls();
+  refreshJegg500Coverage();
 
   // Also format-gated, so it cannot simply follow the earth-only loop.
   refreshHeightLimitRow();
@@ -972,7 +975,12 @@ function initSettings() {
 
   // A reloaded map comes back on Earth; restore whatever was picked.
   const bodyMapFrame = getMapFrame();
-  if (bodyMapFrame) bodyMapFrame.addEventListener('load', pushBodyToMap);
+  if (bodyMapFrame) {
+    bodyMapFrame.addEventListener('load', () => {
+      pushBodyToMap();
+      pushJegg500CoverageToMap();
+    });
+  }
 
   // Max tree size segmented control
   const maxTreeSizeGroup = document.getElementById("max-tree-size-group");
@@ -1586,6 +1594,8 @@ let savePath = "";
 let bedrockSavePath = "";
 let luantiSavePath = "";
 let jegg500Dir = "";
+let jegg500CoverageTiles = [];
+let jegg500CoverageRequest = 0;
 
 const SAVE_PATHS = {
   java: {
@@ -1703,17 +1713,60 @@ function refreshJegg500Controls() {
   const toggle = document.getElementById('jegg500-enabled-toggle');
   const input = document.getElementById('jegg500-dir-input');
   const browseBtn = document.getElementById('jegg500-dir-browse');
+  const interpolationToggle = document.getElementById('jegg500-interpolation-toggle');
   if (!toggle || !input) return;
 
   const onEarth = selectedCelestialBody === 'earth';
   const enabled = toggle.checked && onEarth;
   input.disabled = !enabled;
   if (browseBtn) browseBtn.disabled = !enabled;
+  if (interpolationToggle) interpolationToggle.disabled = !enabled;
 
-  // Keep the directory row visibly inactive when J-EGG500 is switched off.
-  // Off Earth the row is already marked by setCelestialBody().
-  const row = input.closest('.settings-row');
-  if (row) row.classList.toggle('settings-row-unavailable', !enabled && onEarth);
+  // Keep the J-EGG500 rows visibly inactive when the source is switched off.
+  // Off Earth the rows are already marked by setCelestialBody().
+  [input, interpolationToggle].forEach((control) => {
+    const row = control && control.closest('.settings-row');
+    if (row) row.classList.toggle('settings-row-unavailable', !enabled && onEarth);
+  });
+}
+
+function pushJegg500CoverageToMap() {
+  const mapFrame = getMapFrame();
+  if (mapFrame && mapFrame.contentWindow) {
+    mapFrame.contentWindow.postMessage({
+      type: 'setJegg500Coverage',
+      tiles: jegg500CoverageTiles
+    }, '*');
+  }
+}
+
+// The map overlay mirrors the tiles the generator would actually load: Earth,
+// J-EGG500 enabled, and a non-empty directory. Filename scanning happens once
+// per path/toggle change, not on map pan or zoom.
+async function refreshJegg500Coverage() {
+  const toggle = document.getElementById('jegg500-enabled-toggle');
+  const path = jegg500Dir.trim();
+  const enabled = selectedCelestialBody === 'earth' && toggle && toggle.checked && path;
+  const request = ++jegg500CoverageRequest;
+
+  jegg500CoverageTiles = [];
+  if (!enabled) {
+    pushJegg500CoverageToMap();
+    return;
+  }
+
+  // Clear stale tiles immediately while the new directory is being scanned.
+  pushJegg500CoverageToMap();
+
+  try {
+    const tiles = await invoke('gui_list_jegg500_tiles', { path: path });
+    if (request !== jegg500CoverageRequest) return;
+    jegg500CoverageTiles = Array.isArray(tiles) ? tiles : [];
+  } catch (error) {
+    if (request !== jegg500CoverageRequest) return;
+    console.warn("J-EGG500 coverage scan failed:", error);
+  }
+  pushJegg500CoverageToMap();
 }
 
 function initJegg500Setting() {
@@ -1730,9 +1783,13 @@ function initJegg500Setting() {
   }
 
   if (enabledToggle) {
-    enabledToggle.addEventListener('change', refreshJegg500Controls);
+    enabledToggle.addEventListener('change', () => {
+      refreshJegg500Controls();
+      refreshJegg500Coverage();
+    });
   }
   refreshJegg500Controls();
+  refreshJegg500Coverage();
 
   input.addEventListener('change', async () => {
     const newPath = input.value.trim();
@@ -1741,6 +1798,7 @@ function initJegg500Setting() {
       jegg500Dir = validated;
       input.value = validated;
       localStorage.setItem(JEGG500_STORAGE_KEY, validated);
+      refreshJegg500Coverage();
     } catch (_) {
       input.value = jegg500Dir;
     }
@@ -1754,6 +1812,7 @@ function initJegg500Setting() {
           jegg500Dir = picked;
           input.value = picked;
           localStorage.setItem(JEGG500_STORAGE_KEY, picked);
+          refreshJegg500Coverage();
         }
       } catch (error) {
         console.error("J-EGG500 folder picker failed:", error);
@@ -2136,6 +2195,8 @@ async function startGeneration() {
     var voxy_lod = document.getElementById("voxy-lod-toggle").checked;
     var jegg500Toggle = document.getElementById("jegg500-enabled-toggle");
     var jegg500_enabled = !jegg500Toggle.disabled && jegg500Toggle.checked;
+    var jegg500InterpolationToggle = document.getElementById("jegg500-interpolation-toggle");
+    var jegg500_interpolation = !jegg500InterpolationToggle.disabled && jegg500InterpolationToggle.checked;
     var legacyWaterDepthToggle = document.getElementById("legacy-water-depth-toggle");
     var legacy_water_depth = !legacyWaterDepthToggle.disabled && legacyWaterDepthToggle.checked;
     var scale = parseFloat(document.getElementById("scale-value-slider").value);
@@ -2193,6 +2254,7 @@ async function startGeneration() {
         signage: signage,
         celestialBodyName: selectedCelestialBody,
         jegg500Enabled: jegg500_enabled,
+        jegg500Interpolation: jegg500_interpolation,
         legacyWaterDepthEnabled: legacy_water_depth,
         jegg500Dir: jegg500Dir
     });
