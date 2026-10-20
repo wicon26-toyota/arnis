@@ -641,44 +641,90 @@ pub fn generate_world_with_options(
     .map(Arc::new);
     bench.reset();
 
-    // Per-cell water depth field from the LC_WATER mask; empty without land cover.
-    // If local J-EGG500 bathymetry files are available, override ocean depths with
-    // real measured values and fall back to the shoreline-distance estimate where
-    // bathymetry is missing.
-    let big_water_field = if args.rotation.abs() > f64::EPSILON {
-        if args.jegg500_dir.is_some() {
-            eprintln!(
-                "Warning: J-EGG500 bathymetry is disabled when --rotation is used; \
-                 falling back to shoreline-distance depth."
-            );
+    // Per-cell water depth field from the LC_WATER mask; flat without land cover.
+    // J-EGG500 measured depths override the legacy shoreline estimate when enabled.
+    // Either source can be turned off from the GUI/CLI; with both off, water stays flat.
+    let jegg500_dir = if args.jegg500_enabled {
+        args.jegg500_dir.as_deref()
+    } else {
+        None
+    };
+    let fallback_water_field = || {
+        if args.legacy_water_depth {
+            crate::water_depth::compute_big_water_field(&ground, &xzbbox)
+        } else {
+            crate::water_depth::compute_big_water_field_without_legacy(&ground, &xzbbox)
         }
-        crate::water_depth::compute_big_water_field(&ground, &xzbbox)
-    } else if let Some(ref dir) = args.jegg500_dir {
+    };
+
+    let big_water_field = if args.rotation.abs() > f64::EPSILON {
+        if jegg500_dir.is_some() {
+            if args.legacy_water_depth {
+                eprintln!(
+                    "Warning: J-EGG500 bathymetry is disabled when --rotation is used; \
+                     falling back to shoreline-distance depth."
+                );
+            } else {
+                eprintln!(
+                    "Warning: J-EGG500 bathymetry is disabled when --rotation is used; \
+                     legacy water depth is off, so water will be flat."
+                );
+            }
+        }
+        fallback_water_field()
+    } else if let Some(dir) = jegg500_dir {
         let config = Jegg500Config::new(dir);
         match jegg500::load_jegg500_for_bbox(&config, &llbbox, &xzbbox, args.scale) {
             Ok(Some(bathymetry)) => {
-                crate::water_depth::compute_big_water_field_with_bathymetry(
-                    &ground,
-                    &xzbbox,
-                    &bathymetry,
-                    config.compression.unwrap_or_default(),
-                )
+                if args.legacy_water_depth {
+                    crate::water_depth::compute_big_water_field_with_bathymetry(
+                        &ground,
+                        &xzbbox,
+                        &bathymetry,
+                        config.compression.unwrap_or_default(),
+                    )
+                } else {
+                    crate::water_depth::compute_big_water_field_with_bathymetry_only(
+                        &ground,
+                        &xzbbox,
+                        &bathymetry,
+                        config.compression.unwrap_or_default(),
+                    )
+                }
             }
             Ok(None) => {
-                eprintln!(
-                    "Warning: no J-EGG500 bathymetry files found in {}; \
-                     using shoreline-distance depth.",
-                    dir.display()
-                );
-                crate::water_depth::compute_big_water_field(&ground, &xzbbox)
+                if args.legacy_water_depth {
+                    eprintln!(
+                        "Warning: no J-EGG500 bathymetry files found in {}; \
+                         using shoreline-distance depth.",
+                        dir.display()
+                    );
+                } else {
+                    eprintln!(
+                        "Warning: no J-EGG500 bathymetry files found in {}; \
+                         legacy water depth is off, so water will be flat.",
+                        dir.display()
+                    );
+                }
+                fallback_water_field()
             }
             Err(e) => {
-                eprintln!("Warning: failed to load J-EGG500 bathymetry: {e}");
-                crate::water_depth::compute_big_water_field(&ground, &xzbbox)
+                if args.legacy_water_depth {
+                    eprintln!(
+                        "Warning: failed to load J-EGG500 bathymetry: {e}; \
+                         using shoreline-distance depth."
+                    );
+                } else {
+                    eprintln!(
+                        "Warning: failed to load J-EGG500 bathymetry: {e}; \
+                         legacy water depth is off, so water will be flat."
+                    );
+                }
+                fallback_water_field()
             }
         }
     } else {
-        crate::water_depth::compute_big_water_field(&ground, &xzbbox)
+        fallback_water_field()
     };
     // Resolved once here: a body spanning many tiles must not be measured per tile.
     let still_surfaces = water_areas::prescan_still_surfaces(&elements, &ground, &xzbbox);

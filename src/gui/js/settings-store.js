@@ -45,6 +45,10 @@ const SETTINGS = [
 
   { id: 'enable-luanti-toggle', kind: 'checkbox', store: EXTERNAL },
 
+  // Water
+  { id: 'jegg500-enabled-toggle', kind: 'checkbox', store: OWN },
+  { id: 'legacy-water-depth-toggle', kind: 'checkbox', store: OWN },
+
   // Map & Input. #bbox-coords is the area selection, not a preference, so it
   // is intentionally absent.
   { id: 'tile-theme-select', kind: 'select', store: EXTERNAL },

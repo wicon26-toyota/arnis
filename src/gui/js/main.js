@@ -137,6 +137,9 @@ async function applyLocalization(localization) {
     "span[data-localize='aws_only_elevation']": "aws_only_elevation",
     "span[data-localize='bake_lighting']": "bake_lighting",
     "span[data-localize='voxy_lod']": "voxy_lod",
+    "span[data-localize='jegg500_enabled']": "jegg500_enabled",
+    "span[data-localize='jegg500_dir']": "jegg500_dir",
+    "span[data-localize='legacy_water_depth']": "legacy_water_depth",
     "span[data-localize='anonymous_crash_reports']": "anonymous_crash_reports",
     "span[data-localize='map_theme']": "map_theme",
     "span[data-localize='custom_map_source']": "custom_map_source",
@@ -163,6 +166,7 @@ async function applyLocalization(localization) {
     "button[data-localize='signage_full']": "signage_full",
     "div[data-localize='settings_section_generation']": "settings_section_generation",
     "div[data-localize='settings_section_world']": "settings_section_world",
+    "div[data-localize='settings_section_water']": "settings_section_water",
     "div[data-localize='settings_section_map']": "settings_section_map",
     "div[data-localize='settings_section_application']": "settings_section_application",
     "span[data-localize='clear_tile_cache']": "clear_tile_cache",
@@ -414,6 +418,10 @@ const EARTH_ONLY_SETTINGS = [
   'scale-value-slider',
   'aws-only-elevation-toggle',
   'disable-height-limit-toggle',
+  'jegg500-enabled-toggle',
+  'jegg500-dir-input',
+  'jegg500-dir-browse',
+  'legacy-water-depth-toggle',
   // Off Earth the body's own imagery is the only basemap, so neither the
   // Earth theme picker nor a custom Earth tile source has anything to act on.
   'tile-theme-select',
@@ -484,6 +492,9 @@ function setCelestialBody(body) {
     group.classList.toggle('segmented-disabled', off);
     markRow(group);
   });
+
+  // The J-EGG500 directory input is also gated by its own toggle, not just Earth.
+  refreshJegg500Controls();
 
   // Also format-gated, so it cannot simply follow the earth-only loop.
   refreshHeightLimitRow();
@@ -1688,9 +1699,27 @@ function initSavePathRow({ storageKey, inputId, browseId, get, set }) {
 
 const JEGG500_STORAGE_KEY = 'arnis-jegg500-dir';
 
+function refreshJegg500Controls() {
+  const toggle = document.getElementById('jegg500-enabled-toggle');
+  const input = document.getElementById('jegg500-dir-input');
+  const browseBtn = document.getElementById('jegg500-dir-browse');
+  if (!toggle || !input) return;
+
+  const onEarth = selectedCelestialBody === 'earth';
+  const enabled = toggle.checked && onEarth;
+  input.disabled = !enabled;
+  if (browseBtn) browseBtn.disabled = !enabled;
+
+  // Keep the directory row visibly inactive when J-EGG500 is switched off.
+  // Off Earth the row is already marked by setCelestialBody().
+  const row = input.closest('.settings-row');
+  if (row) row.classList.toggle('settings-row-unavailable', !enabled && onEarth);
+}
+
 function initJegg500Setting() {
   const input = document.getElementById('jegg500-dir-input');
   const browseBtn = document.getElementById('jegg500-dir-browse');
+  const enabledToggle = document.getElementById('jegg500-enabled-toggle');
   if (!input) return;
 
   // Restore saved path, if any.
@@ -1699,6 +1728,11 @@ function initJegg500Setting() {
     jegg500Dir = saved;
     input.value = saved;
   }
+
+  if (enabledToggle) {
+    enabledToggle.addEventListener('change', refreshJegg500Controls);
+  }
+  refreshJegg500Controls();
 
   input.addEventListener('change', async () => {
     const newPath = input.value.trim();
@@ -2100,6 +2134,10 @@ async function startGeneration() {
     var aws_only_elevation = document.getElementById("aws-only-elevation-toggle").checked;
     var bake_lighting = document.getElementById("bake-lighting-toggle").checked;
     var voxy_lod = document.getElementById("voxy-lod-toggle").checked;
+    var jegg500Toggle = document.getElementById("jegg500-enabled-toggle");
+    var jegg500_enabled = !jegg500Toggle.disabled && jegg500Toggle.checked;
+    var legacyWaterDepthToggle = document.getElementById("legacy-water-depth-toggle");
+    var legacy_water_depth = !legacyWaterDepthToggle.disabled && legacyWaterDepthToggle.checked;
     var scale = parseFloat(document.getElementById("scale-value-slider").value);
     // var ground_level = parseInt(document.getElementById("ground-level").value, 10);
     // DEPRECATED: Ground level input removed from UI
@@ -2154,6 +2192,8 @@ async function startGeneration() {
         mapItem: mapItem,
         signage: signage,
         celestialBodyName: selectedCelestialBody,
+        jegg500Enabled: jegg500_enabled,
+        legacyWaterDepthEnabled: legacy_water_depth,
         jegg500Dir: jegg500Dir
     });
 

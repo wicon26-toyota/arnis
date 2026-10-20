@@ -18,7 +18,7 @@
 use crate::coordinate_system::cartesian::{XZBBox, XZPoint};
 use crate::coordinate_system::geographic::LLBBox;
 use crate::coordinate_system::transformation::CoordTransformer;
-use crate::water_depth::{BathymetryGrid, NonlinearDepthCompression};
+use crate::water_depth::{BathymetryGrid, BathymetryInterpolation, NonlinearDepthCompression};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -48,14 +48,28 @@ pub struct JeggSample {
     pub depth_m: f32,
 }
 
-/// How a J-EGG500 sample is mapped onto the Minecraft X/Z grid.
+/// How J-EGG500 samples are mapped onto the Minecraft X/Z grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum JeggInterpolation {
     /// Use the depth of the J-EGG500 cell that contains the Minecraft block.
     /// This matches the 500 m native resolution and avoids inventing values
-    /// across data gaps.
-    #[default]
+    /// across data gaps, but leaves 500 m terraces between cells.
+    #[allow(dead_code)]
     NearestCell,
+    /// Bilinearly blend between adjacent J-EGG500 cell centres. This removes
+    /// the 500 m terraces while still returning the measured value at each
+    /// cell centre; partial datasets fall back to their valid neighbours.
+    #[default]
+    Bilinear,
+}
+
+impl From<JeggInterpolation> for BathymetryInterpolation {
+    fn from(value: JeggInterpolation) -> Self {
+        match value {
+            JeggInterpolation::NearestCell => BathymetryInterpolation::Nearest,
+            JeggInterpolation::Bilinear => BathymetryInterpolation::Bilinear,
+        }
+    }
 }
 
 /// Configuration for the J-EGG500 loading step.
@@ -71,8 +85,8 @@ pub struct Jegg500Config {
 }
 
 impl Jegg500Config {
-    /// Sets the interpolation method. Currently only `NearestCell` is
-    /// implemented; other variants will return an error at load time.
+    /// Sets the interpolation method. `Bilinear` is the default; `NearestCell`
+    /// reproduces the pre-interpolation 500 m terraces.
     #[allow(dead_code)]
     pub fn with_interpolation(mut self, interpolation: JeggInterpolation) -> Self {
         self.interpolation = interpolation;
@@ -81,7 +95,7 @@ impl Jegg500Config {
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
         Self {
             base_dir: base_dir.into(),
-            interpolation: JeggInterpolation::NearestCell,
+            interpolation: JeggInterpolation::default(),
             compression: None,
         }
     }
@@ -167,17 +181,18 @@ fn read_tile_file(path: &Path) -> Result<Vec<JeggSample>, String> {
     let reader = BufReader::new(file);
     let mut samples = Vec::new();
     for (line_no, line) in reader.lines().enumerate() {
-        let line = line
-            .map_err(|e| format!("Failed to read line {} of {}: {e}", line_no + 1, path.display()))?;
+        let line = line.map_err(|e| {
+            format!(
+                "Failed to read line {} of {}: {e}",
+                line_no + 1,
+                path.display()
+            )
+        })?;
         match parse_jegg500_line(&line) {
             Ok(Some(sample)) => samples.push(sample),
             Ok(None) => {}
             Err(e) => {
-                return Err(format!(
-                    "{} line {}: {e}",
-                    path.display(),
-                    line_no + 1
-                ));
+                return Err(format!("{} line {}: {e}", path.display(), line_no + 1));
             }
         }
     }
@@ -208,12 +223,8 @@ fn xzbbox_to_grid_bounds(
         .and_then(|d| d.checked_add(1))
         .ok_or("J-EGG500 world Z span overflow")? as usize;
 
-    let width = width_blocks
-        .div_ceil(cell_size_blocks)
-        .max(1);
-    let height = height_blocks
-        .div_ceil(cell_size_blocks)
-        .max(1);
+    let width = width_blocks.div_ceil(cell_size_blocks).max(1);
+    let height = height_blocks.div_ceil(cell_size_blocks).max(1);
 
     width
         .checked_mul(height)
@@ -230,6 +241,7 @@ fn xzbbox_to_grid_bounds(
 }
 
 /// Map a J-EGG500 sample to a grid cell and accumulate the depth.
+#[allow(clippy::too_many_arguments)]
 fn accumulate_sample(
     sample: &JeggSample,
     transformer: &CoordTransformer,
@@ -284,12 +296,7 @@ pub fn load_jegg500_for_bbox(
         ));
     }
 
-    if config.interpolation != JeggInterpolation::NearestCell {
-        return Err(format!(
-            "J-EGG500 interpolation {:?} is not implemented",
-            config.interpolation
-        ));
-    }
+    let interpolation = BathymetryInterpolation::from(config.interpolation);
 
     let (transformer, _) = CoordTransformer::llbbox_to_xzbbox(llbbox, scale)
         .map_err(|e| format!("J-EGG500 coordinate transformation failed: {e}"))?;
@@ -306,13 +313,19 @@ pub fn load_jegg500_for_bbox(
     let mut sums: HashMap<(usize, usize), (f64, u32)> = HashMap::new();
     let mut any_file = false;
     let mut any_sample = false;
+    let mut files_read = 0usize;
+    let mut samples_read = 0usize;
+    let tile_paths = overlapping_tile_paths(&config.base_dir, llbbox);
 
-    for path in overlapping_tile_paths(&config.base_dir, llbbox) {
+    for path in &tile_paths {
         if !path.exists() {
             continue;
         }
         any_file = true;
-        for sample in read_tile_file(&path)? {
+        let tile_samples = read_tile_file(path)?;
+        samples_read += tile_samples.len();
+        files_read += 1;
+        for sample in tile_samples {
             any_sample = true;
             accumulate_sample(
                 &sample,
@@ -338,13 +351,29 @@ pub fn load_jegg500_for_bbox(
         .checked_mul(grid_height)
         .ok_or("J-EGG500 grid dimension overflow")?;
     let mut depth_m = vec![f32::NAN; total];
+    let mut populated_cells = 0usize;
     for (gz, gx) in (0..grid_height).flat_map(|z| (0..grid_width).map(move |x| (z, x))) {
         if let Some((sum, count)) = sums.get(&(gx, gz)) {
             if *count > 0 {
                 depth_m[gz * grid_width + gx] = (sum / f64::from(*count)) as f32;
+                populated_cells += 1;
             }
         }
     }
+
+    eprintln!(
+        "J-EGG500: searched {} candidate tile(s), read {} file(s), \
+         {} sample(s), populated {} grid cell(s) ({}x{} cells, {} block(s)/cell, \
+         {:?} interpolation)",
+        tile_paths.len(),
+        files_read,
+        samples_read,
+        populated_cells,
+        grid_width,
+        grid_height,
+        cell_size_blocks,
+        config.interpolation,
+    );
 
     Ok(Some(
         BathymetryGrid::new(
@@ -355,7 +384,8 @@ pub fn load_jegg500_for_bbox(
             grid_origin_z,
             cell_size_blocks,
         )
-        .map_err(|e| format!("J-EGG500 bathymetry grid creation failed: {e}"))?,
+        .map_err(|e| format!("J-EGG500 bathymetry grid creation failed: {e}"))?
+        .with_interpolation(interpolation),
     ))
 }
 
@@ -417,7 +447,9 @@ mod tests {
 
     #[test]
     fn parse_valid_measured_line() {
-        let s = parse_jegg500_line("0  34.07729 136.22777    24").unwrap().unwrap();
+        let s = parse_jegg500_line("0  34.07729 136.22777    24")
+            .unwrap()
+            .unwrap();
         assert_eq!(s.kind, JeggSampleKind::Measured);
         assert!((s.lat - 34.07729).abs() < 1e-5);
         assert!((s.lon - 136.22777).abs() < 1e-5);
@@ -478,11 +510,23 @@ mod tests {
     }
 
     #[test]
+    fn config_defaults_to_bilinear_interpolation() {
+        let config = Jegg500Config::new("/tmp");
+        assert_eq!(config.interpolation, JeggInterpolation::Bilinear);
+        assert_eq!(
+            BathymetryInterpolation::from(config.interpolation),
+            BathymetryInterpolation::Bilinear
+        );
+    }
+
+    #[test]
     fn load_missing_directory_returns_none() {
         let config = Jegg500Config::new("/nonexistent/path/for/jegg500");
         let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
         let xzbbox = XZBBox::rect_from_xz_lengths(100.0, 100.0).unwrap();
-        assert!(load_jegg500_for_bbox(&config, &llbbox, &xzbbox, 1.0).unwrap().is_none());
+        assert!(load_jegg500_for_bbox(&config, &llbbox, &xzbbox, 1.0)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -503,21 +547,19 @@ mod tests {
     fn synthetic_samples_project_to_expected_cells() {
         let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
         let (transformer, xzbbox) = CoordTransformer::llbbox_to_xzbbox(&llbbox, 1.0).unwrap();
-        let samples = vec![
-            JeggSample {
-                kind: JeggSampleKind::Measured,
-                lat: 34.5,
-                lon: 136.5,
-                depth_m: 42.0,
-            },
-        ];
-        let grid = build_bathymetry_grid_from_samples(&samples, &transformer, &xzbbox, 1.0)
-            .unwrap();
+        let samples = vec![JeggSample {
+            kind: JeggSampleKind::Measured,
+            lat: 34.5,
+            lon: 136.5,
+            depth_m: 42.0,
+        }];
+        let grid =
+            build_bathymetry_grid_from_samples(&samples, &transformer, &xzbbox, 1.0).unwrap();
         // With scale 1.0 the 500 m cell is 500 blocks; the sample sits near the
         // middle of the world, so it lands in the first (and only) grid cell.
-        let xz = transformer.transform_point(crate::coordinate_system::geographic::LLPoint::new(
-            34.5, 136.5,
-        ).unwrap());
+        let xz = transformer.transform_point(
+            crate::coordinate_system::geographic::LLPoint::new(34.5, 136.5).unwrap(),
+        );
         assert_eq!(grid.sample_depth_m(xz.x, xz.z), Some(42.0));
     }
 
@@ -525,19 +567,17 @@ mod tests {
     fn bathymetry_grid_nodata_outside_samples() {
         let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
         let (transformer, xzbbox) = CoordTransformer::llbbox_to_xzbbox(&llbbox, 1.0).unwrap();
-        let samples = vec![
-            JeggSample {
-                kind: JeggSampleKind::Measured,
-                lat: 34.1,
-                lon: 136.1,
-                depth_m: 10.0,
-            },
-        ];
-        let grid = build_bathymetry_grid_from_samples(&samples, &transformer, &xzbbox, 1.0)
-            .unwrap();
-        let xz = transformer.transform_point(crate::coordinate_system::geographic::LLPoint::new(
-            34.9, 136.9,
-        ).unwrap());
+        let samples = vec![JeggSample {
+            kind: JeggSampleKind::Measured,
+            lat: 34.1,
+            lon: 136.1,
+            depth_m: 10.0,
+        }];
+        let grid =
+            build_bathymetry_grid_from_samples(&samples, &transformer, &xzbbox, 1.0).unwrap();
+        let xz = transformer.transform_point(
+            crate::coordinate_system::geographic::LLPoint::new(34.9, 136.9).unwrap(),
+        );
         assert_eq!(grid.sample_depth_m(xz.x, xz.z), None);
     }
 
@@ -598,5 +638,79 @@ mod tests {
         assert_eq!(grid.width(), 201);
         assert_eq!(grid.height(), 201);
         assert_eq!((grid.min_x(), grid.min_z()), (0, 0));
+    }
+
+    /// Integration test spanning two latitude tiles; verifies that samples from
+    /// both `mesh500_34_136.txt` and `mesh500_35_136.txt` are loaded into the grid.
+    #[test]
+    fn load_multiple_real_jegg500_tiles() {
+        let config = Jegg500Config::new("jegg500");
+        let llbbox = LLBBox::new(34.0, 136.0, 36.0, 137.0).unwrap();
+        let xzbbox = XZBBox::rect_from_xz_lengths(200_000.0, 200_000.0).unwrap();
+        let grid = load_jegg500_for_bbox(&config, &llbbox, &xzbbox, 1.0)
+            .unwrap()
+            .expect("real J-EGG500 files should load successfully");
+        assert_eq!(grid.cell_size_blocks(), 500);
+        assert_eq!(grid.width(), 401);
+        assert_eq!(grid.height(), 401);
+        let valid_cells = (0..grid.height())
+            .flat_map(|z| (0..grid.width()).map(move |x| (x, z)))
+            .filter(|&(x, z)| {
+                grid.sample_depth_m(x as i32 * 500, z as i32 * 500)
+                    .is_some()
+            })
+            .count();
+        assert!(
+            valid_cells > 5_000,
+            "expected thousands of valid cells, got {valid_cells}"
+        );
+    }
+
+    /// A real adjacent pair with different depths must blend at the shared cell
+    /// boundary instead of keeping the nearest-cell step.
+    #[test]
+    fn real_data_blends_at_cell_boundary() {
+        let config = Jegg500Config::new("jegg500");
+        let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
+        let xzbbox = XZBBox::rect_from_xz_lengths(100_000.0, 100_000.0).unwrap();
+        let grid = load_jegg500_for_bbox(&config, &llbbox, &xzbbox, 1.0)
+            .unwrap()
+            .expect("real J-EGG500 files should load successfully");
+        let nearest = grid
+            .clone()
+            .with_interpolation(BathymetryInterpolation::Nearest);
+        let cell = grid.cell_size_blocks() as i32;
+
+        for gz in 0..grid.height() {
+            let z = grid.min_z() + gz as i32 * cell + cell / 2;
+            for gx in 0..grid.width() - 1 {
+                let left_x = grid.min_x() + gx as i32 * cell + cell / 2;
+                let right_x = left_x + cell;
+                let (Some(left), Some(right)) = (
+                    grid.sample_depth_m(left_x, z),
+                    grid.sample_depth_m(right_x, z),
+                ) else {
+                    continue;
+                };
+                if (right - left).abs() < 5.0 {
+                    continue;
+                }
+
+                let boundary_x = left_x + cell / 2;
+                let smooth = grid.sample_depth_m(boundary_x, z).unwrap();
+                let hard = nearest.sample_depth_m(boundary_x, z).unwrap();
+                assert!(
+                    (smooth - (left + right) / 2.0).abs() < 0.01,
+                    "expected the midpoint average, got {smooth} for {left}/{right}"
+                );
+                assert!(
+                    (hard - left).abs() < f32::EPSILON || (hard - right).abs() < f32::EPSILON,
+                    "nearest should return one of the adjacent cells, got {hard}"
+                );
+                return;
+            }
+        }
+
+        panic!("real J-EGG500 data contains no adjacent cells with a depth difference");
     }
 }

@@ -141,11 +141,22 @@ pub struct Args {
     pub aws_only_elevation: bool,
 
     /// Directory containing J-EGG500 `mesh500_<lat>_<lon>.txt` bathymetry files.
-    /// When provided, real measured depths are used for ocean cells around Japan
-    /// instead of the synthetic shoreline-distance depth. Missing or partial data
-    /// falls back to the legacy behaviour.
+    /// When provided (and J-EGG500 is enabled), real measured depths are used for
+    /// ocean cells around Japan. Missing or partial data falls back to the legacy
+    /// behaviour unless `--no-legacy-water-depth` is set.
     #[arg(long, value_name = "DIR")]
     pub jegg500_dir: Option<PathBuf>,
+
+    /// Use J-EGG500 bathymetry when `--jegg500-dir` is set. Enabled by default;
+    /// `--no-jegg500-bathymetry` ignores the directory without forgetting it.
+    #[arg(long = "no-jegg500-bathymetry", default_value_t = true, action = ArgAction::SetFalse)]
+    pub jegg500_enabled: bool,
+
+    /// Generate synthetic shoreline-distance water depth where J-EGG500 data is
+    /// unavailable. Enabled by default; `--no-legacy-water-depth` leaves those
+    /// cells flat instead.
+    #[arg(long = "no-legacy-water-depth", default_value_t = true, action = ArgAction::SetFalse)]
+    pub legacy_water_depth: bool,
 
     /// Print generation-only timing to stderr (excludes data fetching)
     #[arg(long, hide = true)]
@@ -356,6 +367,8 @@ pub fn apply_body_defaults(args: &mut Args) {
     args.interior = false;
     args.legacy_trees = false;
     args.aws_only_elevation = false;
+    args.jegg500_enabled = false;
+    args.legacy_water_depth = false;
     // Relief already fits vanilla height, so the pack would add only empty sky.
     args.disable_height_limit = false;
     // Airless bodies look right at night. Only a default: comparing against the
@@ -680,6 +693,8 @@ mod tests {
         assert!(!args.bake_lighting);
         assert!(!args.voxy_lod);
         assert!(!args.map_preview);
+        assert!(args.jegg500_enabled);
+        assert!(args.legacy_water_depth);
         assert_eq!(args.signage, SignageLevel::Basic);
         let cmd = [
             "arnis",
@@ -728,6 +743,49 @@ mod tests {
         let args = Args::parse_from(cmd.iter());
         assert!(args.interior);
         assert!(args.overture);
+    }
+
+    #[test]
+    fn water_depth_sources_can_be_disabled_independently() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp_path = tmpdir.path().to_str().unwrap();
+
+        let cmd = [
+            "arnis",
+            "--output-dir",
+            tmp_path,
+            "--bbox",
+            "1,2,3,4",
+            "--no-jegg500-bathymetry",
+        ];
+        let args = Args::parse_from(cmd.iter());
+        assert!(!args.jegg500_enabled);
+        assert!(args.legacy_water_depth);
+
+        let cmd = [
+            "arnis",
+            "--output-dir",
+            tmp_path,
+            "--bbox",
+            "1,2,3,4",
+            "--no-legacy-water-depth",
+        ];
+        let args = Args::parse_from(cmd.iter());
+        assert!(args.jegg500_enabled);
+        assert!(!args.legacy_water_depth);
+
+        let cmd = [
+            "arnis",
+            "--output-dir",
+            tmp_path,
+            "--bbox",
+            "1,2,3,4",
+            "--no-jegg500-bathymetry",
+            "--no-legacy-water-depth",
+        ];
+        let args = Args::parse_from(cmd.iter());
+        assert!(!args.jegg500_enabled);
+        assert!(!args.legacy_water_depth);
     }
 
     #[test]

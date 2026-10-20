@@ -1088,6 +1088,8 @@ fn gui_start_generation(
     map_item: bool,
     signage: String,
     celestial_body_name: String,
+    jegg500_enabled: bool,
+    legacy_water_depth_enabled: bool,
     jegg500_dir: String,
 ) -> Result<(), String> {
     use progress::emit_gui_error;
@@ -1412,6 +1414,8 @@ fn gui_start_generation(
                 rotation: rotation_angle.clamp(-90.0, 90.0),
                 disable_height_limit,
                 aws_only_elevation,
+                jegg500_enabled,
+                legacy_water_depth: legacy_water_depth_enabled,
                 jegg500_dir: {
                     let dir = jegg500_dir.trim();
                     if dir.is_empty() {

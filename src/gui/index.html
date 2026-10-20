@@ -301,19 +301,7 @@
           </div>
         </div>
 
-        <!-- J-EGG500 Bathymetry Directory -->
-        <div class="settings-row">
-          <label for="jegg500-dir-input">
-            <span data-localize="jegg500_dir">J-EGG500 Bathymetry</span>
-            <span class="tooltip-icon" data-tooltip="Directory containing J-EGG500 mesh500_*.txt bathymetry files. Leave empty to use the synthetic shoreline-distance water depth.">?</span>
-          </label>
-          <div class="settings-control save-path-control">
-            <input type="text" id="jegg500-dir-input" name="jegg500-dir-input" class="save-path-input" placeholder="Leave empty to disable">
-            <button type="button" id="jegg500-dir-browse" class="save-path-browse" title="Browse...">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>
-            </button>
-          </div>
-        </div>
+
 
         <!-- World Scale Slider -->
         <div class="settings-row">
@@ -350,6 +338,45 @@
           </label>
           <div class="settings-control">
             <input type="checkbox" id="enable-luanti-toggle" name="enable-luanti-toggle">
+          </div>
+        </div>
+
+        <!-- Section: Water -->
+        <div class="settings-section-header" data-localize="settings_section_water">Water</div>
+
+        <!-- J-EGG500 Bathymetry Toggle -->
+        <div class="settings-row">
+          <label for="jegg500-enabled-toggle">
+            <span data-localize="jegg500_enabled">J-EGG500 Bathymetry</span>
+            <span class="tooltip-icon" data-tooltip="Use measured J-EGG500 depths from the directory below. Turn off to ignore the directory and use the legacy depth estimate instead.">?</span>
+          </label>
+          <div class="settings-control">
+            <input type="checkbox" id="jegg500-enabled-toggle" name="jegg500-enabled-toggle" checked>
+          </div>
+        </div>
+
+        <!-- J-EGG500 Bathymetry Directory -->
+        <div class="settings-row">
+          <label for="jegg500-dir-input">
+            <span data-localize="jegg500_dir">J-EGG500 Data Directory</span>
+            <span class="tooltip-icon" data-tooltip="Directory containing J-EGG500 mesh500_*.txt bathymetry files. Disabled when the J-EGG500 toggle above is off.">?</span>
+          </label>
+          <div class="settings-control save-path-control">
+            <input type="text" id="jegg500-dir-input" name="jegg500-dir-input" class="save-path-input" placeholder="Select the folder containing mesh500_*.txt files">
+            <button type="button" id="jegg500-dir-browse" class="save-path-browse" title="Browse...">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Legacy Water Depth Toggle -->
+        <div class="settings-row">
+          <label for="legacy-water-depth-toggle">
+            <span data-localize="legacy_water_depth">Legacy Water Depth</span>
+            <span class="tooltip-icon" data-tooltip="Generate synthetic water depth from shoreline distance where J-EGG500 data is unavailable. Turn off to use only J-EGG500 depths; with neither source, water stays flat.">?</span>
+          </label>
+          <div class="settings-control">
+            <input type="checkbox" id="legacy-water-depth-toggle" name="legacy-water-depth-toggle" checked>
           </div>
         </div>
 
