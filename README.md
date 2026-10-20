@@ -1,20 +1,39 @@
+<p align="center">
+  <img src="assets/git/banner.png" alt="Arnis" width="747">
+</p>
+
 # Arnis
 
-Arnis は、OpenStreetMap の地理データと標高データ、およびこのブランチでは J-EGG500 の海底地形データを組み合わせて、Minecraft Java Edition / Bedrock Edition、Luanti（Minetest）向けのワールドを生成するツールです。
+Arnis は、OpenStreetMap の地理データと標高データから、実在する街並みを Minecraft のワールドとして生成するツールです。Java Edition / Bedrock Edition / Luanti（Minetest）に対応しています。
 
-このリポジトリは **`feature/jegg500-bathymetry`** ブランチです。日本周辺の海域で実測に基づく水深を反映する J-EGG500 対応が入っています。
+このリポジトリは **`feature/jegg500-bathymetry`** ブランチです。日本周辺の海域に J-EGG500 の実測海底地形を反映するため、次の機能を追加しています。
+
+- J-EGG500（500 m メッシュ）の海底地形読み込み
+- セル間の双線形補間と、欠損データ時のフォールバック
+- 回転したワールドでも、J-EGG500 をワールドに合わせて回転して適用
+- GUI / CLI から J-EGG500 と従来の水深生成を個別に ON/OFF
+
+## 主な機能
+
+- OpenStreetMap の建物・道路・土地利用などを反映したワールド生成
+- 標高データを使った地形生成
+- 日本周辺の実測水深を反映する J-EGG500 対応
+- Java Edition / Bedrock Edition / Luanti（Minetest）向けの出力
+- デスクトップ GUI と CLI の両方から実行可能
 
 ## 必要な環境
 
 - [Rust](https://www.rust-lang.org/tools/install)（stable toolchain）
-- 各 OS のビルド依存関係
+- GUI をビルドする場合は、各 OS の Tauri / WebKitGTK 依存パッケージ
+
+CLI のみを使う場合は、GUI 用の依存パッケージは不要です。
 
 ### Linux
 
 Tauri / WebKitGTK ベースの GUI をビルドするため、以下のようなパッケージが必要です。ディストリビューションによってパッケージ名は異なります。
 
 - `pkg-config`
-- `libssl-dev` / `openssl-devel`
+- OpenSSL 開発パッケージ（`libssl-dev` / `openssl-devel`）
 - `libgtk-3-dev`
 - `libwebkit2gtk-4.1-dev`
 - `libjavascriptcoregtk-4.1-dev`
@@ -24,6 +43,15 @@ Tauri / WebKitGTK ベースの GUI をビルドするため、以下のような
 - `libpango1.0-dev`
 - `libgdk-pixbuf-2.0-dev`
 - `libwayland-dev`
+
+Debian / Ubuntu 系では、例えば次のようにインストールできます。
+
+```bash
+sudo apt install \
+  pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+  libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libglib2.0-dev \
+  libcairo2-dev libpango1.0-dev libgdk-pixbuf-2.0-dev libwayland-dev
+```
 
 Nix を使う場合は `flake.nix` にこれらの依存関係が定義されています。
 
@@ -39,9 +67,10 @@ Nix を使う場合は `flake.nix` にこれらの依存関係が定義されて
 ## セットアップ
 
 ```bash
-# リポジトリをクローン
-git clone https://github.com/louis-e/arnis.git
+# リポジトリをクローンしてブランチを切り替え
+git clone https://github.com/wicon26-toyota/arnis.git
 cd arnis
+git switch feature/jegg500-bathymetry
 
 # 依存関係を取得
 cargo fetch
@@ -55,19 +84,13 @@ cargo fetch
 cargo run --release
 ```
 
-ブラウザベースの UI が起動します。マップ上で範囲を選択し、出力先のワールドフォルダを指定して **Start Generation** を押してください。
+Tauri ベースのデスクトップ GUI が起動します。マップ上で範囲を選択し、出力先のワールドフォルダを指定して **Start Generation** を押してください。
+
+![Arnis GUI](assets/git/gui.png)
 
 ### CLI 版
 
-GUI 機能を無効にして軽量な CLI バイナリをビルドします。
-
-```bash
-cargo run --release --no-default-features -- \
-  --output-dir="C:/Users/USER/AppData/Roaming/.minecraft/saves/worldname" \
-  --bbox="min_lat,min_lng,max_lat,max_lng"
-```
-
-`--bbox` は生成する範囲を `南西緯,南西経,北東緯,北東経` で指定します。例：
+GUI 機能を無効にして、軽量な CLI バイナリをビルドします。
 
 ```bash
 cargo run --release --no-default-features -- \
@@ -75,7 +98,15 @@ cargo run --release --no-default-features -- \
   --bbox="35.55,139.65,35.75,139.90"
 ```
 
-主要なオプション：
+`--bbox` は生成する範囲を `南西緯度,南西経度,北東緯度,北東経度` で指定します。
+
+Windows の場合は、出力先を例えば次のように指定します。
+
+```text
+--output-dir="C:/Users/USER/AppData/Roaming/.minecraft/saves/worldname"
+```
+
+### 主な CLI オプション
 
 | オプション | 説明 |
 | --- | --- |
@@ -83,29 +114,34 @@ cargo run --release --no-default-features -- \
 | `--bbox` | 生成範囲（`min_lat,min_lng,max_lat,max_lng`） |
 | `--mode` | `geo-terrain`（標高＋OSM、デフォルト） / `geo-only`（平坦＋OSM） / `terrain-only`（標高のみ） |
 | `--scale` | ワールドスケール（1.0 = 実寸） |
+| `--body` | `earth` / `moon` / `mars`（月・火星は地形のみ） |
+| `--rotation` | ワールドの回転角度（度、`-90`〜`90`、正の値で時計回り） |
 | `--bedrock` | Bedrock Edition 用 `.mcworld` を生成 |
 | `--luanti` | Luanti（Minetest）用 `map.sqlite` を生成 |
 | `--jegg500-dir` | J-EGG500 データディレクトリを指定 |
-| `--no-jegg500-bathymetry` | ディレクトリ設定を残したまま J-EGG500 の使用を無効化 |
+| `--no-jegg500-bathymetry` | J-EGG500 を無効化（`--jegg500-dir` は無視） |
 | `--no-legacy-water-depth` | 従来の海岸線距離ベースの水深生成を無効化 |
+| `--help` | すべてのオプションを表示 |
 
 ### Nix で実行
 
 ```bash
-nix run github:louis-e/arnis -- \
+nix run . -- \
   --output-dir="$HOME/.minecraft/saves/worldname" \
   --bbox="min_lat,min_lng,max_lat,max_lng"
 ```
 
 ## J-EGG500 海底地形データの利用
 
-このブランチでは、日本周辺の海域で実測水深を反映できるよう、J-EGG500（500 m メッシュの海底地形データ）に対応しています。
+日本周辺の海域で実測水深を反映するには、J-EGG500（500 m メッシュの海底地形データ）をダウンロードして配置します。
 
-### 注意点
-<https://www.jodc.go.jp/jodcweb/JDOSS/caution_j.html>
-
-↑の海洋データ・情報の使用上の注意「無断で、データ等を複製して第三者に提供しないようにしてください。」のもと、J-EGG500のデータは直接プッシュしないようにしてください。
-
+> **データの取り扱いについて**
+>
+> J-EGG500 のデータはこのリポジトリに含まれていません。利用条件については、JODC の「海洋データ・情報の使用上の注意」を確認してください。
+>
+> <https://www.jodc.go.jp/jodcweb/JDOSS/caution_j.html>
+>
+> ダウンロードしたデータをこのリポジトリへコミットしたり、第三者へ再配布したりしないでください。`jegg500/` ディレクトリは `.gitignore` に登録されており、Git の管理対象外になっています。
 
 ### 1. データをダウンロードする
 
@@ -113,13 +149,12 @@ nix run github:louis-e/arnis -- \
 
 <https://www.jodc.go.jp/vpage/depth500_file_j.html>
 
-ファイル名は `mesh500_<lat>_<lon>.txt` の形式になっています。緯度・経度は整数度のタイル単位です。
+ファイル名は `mesh500_<lat>_<lon>.txt` の形式です。緯度・経度は整数度のタイル単位になっています。
 
 ### 2. データを配置する
 
-リポジトリ内の `jegg500/` ディレクトリ、または任意のディレクトリにダウンロードした `mesh500_*.txt` ファイルを配置します。
+リポジトリ内の `jegg500/` ディレクトリ、または任意のディレクトリに、ダウンロードした `mesh500_*.txt` ファイルを配置します。
 
-例: 
 ```text
 jegg500/
 ├── mesh500_34_136.txt
@@ -128,24 +163,22 @@ jegg500/
 └── ...
 ```
 
-生成範囲に含まれるタイルが自動的に読み込まれます。500mメッシュのセル間は双線形補間されるため、セル境界の段差を抑えた海底地形になります。一部のタイルが欠けていても、データがない海域は従来の海岸線距離に基づく水深でフォールバックします（従来の水深生成がオンの場合）。
+生成範囲に含まれるタイルが自動的に読み込まれます。500 m メッシュのセル間は双線形補間されるため、セル境界の段差を抑えた海底地形になります。欠損セルは補間から除外され、利用可能な近傍データから補間されます。
 
-### 3. 生成時にディレクトリを指定する
+### 3. 生成時に有効化する
 
 #### GUI の場合
 
-Settings の **水** セクションで次の 2 つを切り替えられます。どちらも初期状態はオンです。
+Settings の **水** セクションで、次の 2 つを切り替えられます。どちらも初期状態はオンです。
 
-- **J-EGG500 海底地形**: 下の **J-EGG500 データフォルダ** に置いた実測データを使うかどうか。オフにしてもフォルダの設定は保持されます。
-- **従来の水深生成**: 海岸線からの距離で水深を推定する従来方式を使うかどうか。J-EGG500 のデータが欠けている海域などでフォールバックとして使われます。
-
-J-EGG500 をオン、従来の水深生成をオフにすると、J-EGG500 のデータがある海域だけ実測水深になり、データがない海域はフラットな水になります。両方オフの場合もフラットな水になります。
+- **J-EGG500 海底地形**: **J-EGG500 データフォルダ** に置いた実測データを使うかどうか。オフにしてもフォルダの設定は保持されます。
+- **従来の水深生成**: 海岸線からの距離で水深を推定する従来方式を使うかどうか。J-EGG500 のデータが欠けている海域のフォールバックとして使われます。
 
 **J-EGG500 データフォルダ** で、データを配置したディレクトリを選択してください。空欄の場合は J-EGG500 を使用しません。
 
 #### CLI の場合
 
-`--jegg500-dir` でディレクトリを指定します。従来の水深生成だけを無効にしたい場合は `--no-legacy-water-depth`、J-EGG500 だけを無効にしたい場合は `--no-jegg500-bathymetry` を指定します。
+`--jegg500-dir` でディレクトリを指定します。
 
 ```bash
 cargo run --release --no-default-features -- \
@@ -153,30 +186,33 @@ cargo run --release --no-default-features -- \
   --bbox="34.0,136.0,35.0,137.0" \
   --jegg500-dir="./jegg500"
 ```
-<br><br>
-Wrote by AI
-<br><br>
-## :copyright: License Information
+
+従来の水深生成だけを無効にしたい場合は `--no-legacy-water-depth`、J-EGG500 だけを無効にしたい場合は `--no-jegg500-bathymetry` を指定します。
+
+### 4. 水深生成の組み合わせ
+
+| J-EGG500 海底地形 | 従来の水深生成 | 結果 |
+| --- | --- | --- |
+| ON | ON | J-EGG500 がある海域は実測水深。欠損している海域は従来の推定水深で補完 |
+| ON | OFF | J-EGG500 がある海域だけ実測水深。それ以外の海域はフラットな水 |
+| OFF | ON | すべての海域で従来の推定水深 |
+| OFF | OFF | すべての海域でフラットな水 |
+
+補足:
+
+- 「フラットな水」は、水深を掘らずに水面だけを生成する状態です。
+- 回転（`--rotation` / GUI の回転角度）を指定した場合も、J-EGG500 の海底地形はワールドの回転に合わせて適用されます。回転後の範囲外やデータ欠損部では、従来の水深生成がオンならそちらで補完され、オフならフラットな水になります。
+
+## ライセンス
+
 Copyright (c) 2022-2026 Louis Erbkamm (louis-e)
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.[^3]
+Apache License 2.0 の下で配布されています。詳細は [LICENSE](LICENSE) を参照してください。
 
 The Luanti block-name mapping in `src/luanti_block_map.rs` is derived from [MC2MT](https://github.com/rollerozxa/MC2MT) by rollerozxa and is licensed under the GNU Lesser General Public License v2.1 or later. The full attribution and license header are preserved in that file.
 
-Download Arnis only from the official source https://arnismc.com or https://github.com/louis-e/arnis/. Every other website providing a download and claiming to be affiliated with the project is unofficial and may be malicious.
+Download Arnis only from the official source <https://arnismc.com> or <https://github.com/louis-e/arnis/>. Every other website providing a download and claiming to be affiliated with the project is unofficial and may be malicious.
 
 The logo was made by @nxfx21.
 
 NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.
-
-[^3]: https://github.com/louis-e/arnis/blob/main/LICENSE

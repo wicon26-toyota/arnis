@@ -126,7 +126,8 @@ pub struct Args {
     #[arg(long, allow_hyphen_values = true)]
     pub spawn_lng: Option<f64>,
 
-    /// Clockwise rotation angle in degrees (optional, range: -90 to 90)
+    /// Clockwise rotation angle in degrees (optional, range: -90 to 90).
+    /// J-EGG500 bathymetry rotates with the world.
     #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
     pub rotation: f64,
 

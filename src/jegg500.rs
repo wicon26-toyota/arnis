@@ -275,7 +275,13 @@ fn accumulate_sample(
     entry.1 += 1;
 }
 
-/// Build a world-aligned bathymetry grid from local J-EGG500 files.
+/// Build a bathymetry grid from local J-EGG500 files.
+///
+/// The lattice is built in **pre-rotation** world coordinates. When
+/// `rotation_degrees` is non-zero, the returned grid carries the matching
+/// rotation, so callers can still sample it with final world X/Z. This keeps
+/// the 500 m source lattice intact instead of binning rotated samples into an
+/// axis-aligned grid, which would leave holes at some angles.
 ///
 /// Returns `Ok(None)` when no data directory was supplied, the directory does
 /// not exist, or no overlapping files contain valid samples. This lets the
@@ -283,8 +289,8 @@ fn accumulate_sample(
 pub fn load_jegg500_for_bbox(
     config: &Jegg500Config,
     llbbox: &LLBBox,
-    xzbbox: &XZBBox,
     scale: f64,
+    rotation_degrees: f64,
 ) -> Result<Option<BathymetryGrid>, String> {
     if !config.base_dir.exists() {
         return Ok(None);
@@ -298,7 +304,7 @@ pub fn load_jegg500_for_bbox(
 
     let interpolation = BathymetryInterpolation::from(config.interpolation);
 
-    let (transformer, _) = CoordTransformer::llbbox_to_xzbbox(llbbox, scale)
+    let (transformer, source_xzbbox) = CoordTransformer::llbbox_to_xzbbox(llbbox, scale)
         .map_err(|e| format!("J-EGG500 coordinate transformation failed: {e}"))?;
 
     // A 500 m J-EGG500 cell maps to this many Minecraft blocks.
@@ -308,7 +314,7 @@ pub fn load_jegg500_for_bbox(
         .min(usize::MAX as f64) as usize;
 
     let (grid_origin_x, grid_origin_z, grid_width, grid_height) =
-        xzbbox_to_grid_bounds(xzbbox, cell_size_blocks)?;
+        xzbbox_to_grid_bounds(&source_xzbbox, cell_size_blocks)?;
 
     let mut sums: HashMap<(usize, usize), (f64, u32)> = HashMap::new();
     let mut any_file = false;
@@ -361,10 +367,13 @@ pub fn load_jegg500_for_bbox(
         }
     }
 
+    let rotation_center_x = (source_xzbbox.min_x() + source_xzbbox.max_x()) as f64 / 2.0;
+    let rotation_center_z = (source_xzbbox.min_z() + source_xzbbox.max_z()) as f64 / 2.0;
+
     eprintln!(
         "J-EGG500: searched {} candidate tile(s), read {} file(s), \
          {} sample(s), populated {} grid cell(s) ({}x{} cells, {} block(s)/cell, \
-         {:?} interpolation)",
+         {:?} interpolation, {:.2}° rotation)",
         tile_paths.len(),
         files_read,
         samples_read,
@@ -373,6 +382,7 @@ pub fn load_jegg500_for_bbox(
         grid_height,
         cell_size_blocks,
         config.interpolation,
+        rotation_degrees,
     );
 
     Ok(Some(
@@ -385,7 +395,8 @@ pub fn load_jegg500_for_bbox(
             cell_size_blocks,
         )
         .map_err(|e| format!("J-EGG500 bathymetry grid creation failed: {e}"))?
-        .with_interpolation(interpolation),
+        .with_interpolation(interpolation)
+        .with_rotation(rotation_degrees, rotation_center_x, rotation_center_z),
     ))
 }
 
@@ -523,8 +534,7 @@ mod tests {
     fn load_missing_directory_returns_none() {
         let config = Jegg500Config::new("/nonexistent/path/for/jegg500");
         let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
-        let xzbbox = XZBBox::rect_from_xz_lengths(100.0, 100.0).unwrap();
-        assert!(load_jegg500_for_bbox(&config, &llbbox, &xzbbox, 1.0)
+        assert!(load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0)
             .unwrap()
             .is_none());
     }
@@ -628,16 +638,80 @@ mod tests {
     fn load_real_jegg500_files_produces_grid() {
         let config = Jegg500Config::new("jegg500");
         let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
-        let xzbbox = XZBBox::rect_from_xz_lengths(100_000.0, 100_000.0).unwrap();
-        let grid = load_jegg500_for_bbox(&config, &llbbox, &xzbbox, 1.0)
+        let grid = load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0)
             .unwrap()
             .expect("real J-EGG500 files should load successfully");
-        // At scale 1.0 a 500 m cell is 500 blocks; a 100.001 km world spans
-        // 100001 blocks, which rounds up to 201 cells.
+        // Derive the expected lattice from the same geographic extent the map
+        // uses: ~91 km east-west and ~111 km north-south at this latitude.
+        let (_, source_bbox) = CoordTransformer::llbbox_to_xzbbox(&llbbox, 1.0).unwrap();
+        let expected_width =
+            ((source_bbox.max_x() - source_bbox.min_x() + 1) as usize).div_ceil(500);
+        let expected_height =
+            ((source_bbox.max_z() - source_bbox.min_z() + 1) as usize).div_ceil(500);
         assert_eq!(grid.cell_size_blocks(), 500);
-        assert_eq!(grid.width(), 201);
-        assert_eq!(grid.height(), 201);
+        assert_eq!(grid.width(), expected_width);
+        assert_eq!(grid.height(), expected_height);
         assert_eq!((grid.min_x(), grid.min_z()), (0, 0));
+    }
+
+    /// A 90° world rotation must keep every 500 m source sample reachable at
+    /// its rotated final-world position.
+    #[test]
+    fn rotated_real_jegg500_samples_align_with_rotated_world() {
+        let config = Jegg500Config::new("jegg500");
+        let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
+        let source = load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0)
+            .unwrap()
+            .expect("real J-EGG500 files should load successfully");
+        let rotated = load_jegg500_for_bbox(&config, &llbbox, 1.0, 90.0)
+            .unwrap()
+            .expect("real J-EGG500 files should load successfully");
+
+        // Rotation must not expand or resample the source lattice.
+        assert_eq!(
+            (source.width(), source.height()),
+            (rotated.width(), rotated.height())
+        );
+
+        let (_, source_bbox) = CoordTransformer::llbbox_to_xzbbox(&llbbox, 1.0).unwrap();
+        let cx = (source_bbox.min_x() + source_bbox.max_x()) as f64 / 2.0;
+        let cz = (source_bbox.min_z() + source_bbox.max_z()) as f64 / 2.0;
+        let cell = source.cell_size_blocks() as i32;
+        let mut checked = 0usize;
+
+        'rows: for gz in 0..source.height() {
+            let z = source.min_z() + gz as i32 * cell + cell / 2;
+            for gx in 0..source.width() {
+                let x = source.min_x() + gx as i32 * cell + cell / 2;
+                let Some(expected) = source.sample_depth_m(x, z) else {
+                    continue;
+                };
+
+                // Independent forward rotation for a positive (clockwise) 90°.
+                let dx = x as f64 - cx;
+                let dz = z as f64 - cz;
+                let final_x = (-dz + cx).round() as i32;
+                let final_z = (dx + cz).round() as i32;
+
+                let actual = rotated
+                    .sample_depth_m(final_x, final_z)
+                    .unwrap_or_else(|| panic!("no rotated sample at ({final_x},{final_z})"));
+                assert!(
+                    (actual - expected).abs() < 0.01,
+                    "rotated sample ({x},{z}) -> ({final_x},{final_z}) was {actual}, expected {expected}"
+                );
+
+                checked += 1;
+                if checked >= 2_000 {
+                    break 'rows;
+                }
+            }
+        }
+
+        assert!(
+            checked >= 2_000,
+            "expected at least 2,000 valid rotated samples, got {checked}"
+        );
     }
 
     /// Integration test spanning two latitude tiles; verifies that samples from
@@ -646,13 +720,17 @@ mod tests {
     fn load_multiple_real_jegg500_tiles() {
         let config = Jegg500Config::new("jegg500");
         let llbbox = LLBBox::new(34.0, 136.0, 36.0, 137.0).unwrap();
-        let xzbbox = XZBBox::rect_from_xz_lengths(200_000.0, 200_000.0).unwrap();
-        let grid = load_jegg500_for_bbox(&config, &llbbox, &xzbbox, 1.0)
+        let grid = load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0)
             .unwrap()
             .expect("real J-EGG500 files should load successfully");
+        let (_, source_bbox) = CoordTransformer::llbbox_to_xzbbox(&llbbox, 1.0).unwrap();
+        let expected_width =
+            ((source_bbox.max_x() - source_bbox.min_x() + 1) as usize).div_ceil(500);
+        let expected_height =
+            ((source_bbox.max_z() - source_bbox.min_z() + 1) as usize).div_ceil(500);
         assert_eq!(grid.cell_size_blocks(), 500);
-        assert_eq!(grid.width(), 401);
-        assert_eq!(grid.height(), 401);
+        assert_eq!(grid.width(), expected_width);
+        assert_eq!(grid.height(), expected_height);
         let valid_cells = (0..grid.height())
             .flat_map(|z| (0..grid.width()).map(move |x| (x, z)))
             .filter(|&(x, z)| {
@@ -672,8 +750,7 @@ mod tests {
     fn real_data_blends_at_cell_boundary() {
         let config = Jegg500Config::new("jegg500");
         let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
-        let xzbbox = XZBBox::rect_from_xz_lengths(100_000.0, 100_000.0).unwrap();
-        let grid = load_jegg500_for_bbox(&config, &llbbox, &xzbbox, 1.0)
+        let grid = load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0)
             .unwrap()
             .expect("real J-EGG500 files should load successfully");
         let nearest = grid

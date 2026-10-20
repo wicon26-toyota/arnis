@@ -187,6 +187,12 @@ pub enum BathymetryInterpolation {
 /// This type deliberately does not parse J-EGG500/JHA files or perform geographic
 /// projection. Convert source coordinates into this world-aligned grid in the
 /// data-loading layer, where Arnis' map projection and scale are available.
+///
+/// A rotated world can attach rotation metadata with
+/// [`BathymetryGrid::with_rotation`]. The stored lattice stays in pre-rotation
+/// world space, while `sample_depth_m` maps final world X/Z back through the
+/// inverse rotation. Keeping the source lattice untouched avoids resampling a
+/// rotated 500 m grid into holes.
 #[derive(Clone, Debug)]
 pub struct BathymetryGrid {
     depth_m: Vec<f32>,
@@ -196,6 +202,50 @@ pub struct BathymetryGrid {
     min_z: i32,
     cell_size_blocks: usize,
     interpolation: BathymetryInterpolation,
+    rotation: Option<BathymetryRotation>,
+}
+
+/// Rotation applied to the generated world, stored in the form needed to map
+/// final world coordinates back into the unrotated bathymetry lattice.
+#[derive(Clone, Copy, Debug)]
+struct BathymetryRotation {
+    center_x: f64,
+    center_z: f64,
+    /// Sine/cosine of the forward map rotation (positive angle = clockwise).
+    sin_r: f64,
+    cos_r: f64,
+}
+
+impl BathymetryRotation {
+    fn new(angle_degrees: f64, center_x: f64, center_z: f64) -> Option<Self> {
+        if !angle_degrees.is_finite()
+            || angle_degrees.abs() < f64::EPSILON
+            || !center_x.is_finite()
+            || !center_z.is_finite()
+        {
+            return None;
+        }
+        // Matches `rotate_world`: the user-facing angle is clockwise, while the
+        // internal XZ rotation formula is counterclockwise.
+        let rad = (-angle_degrees).to_radians();
+        Some(Self {
+            center_x,
+            center_z,
+            sin_r: rad.sin(),
+            cos_r: rad.cos(),
+        })
+    }
+
+    /// Inverse of the forward XZ rotation used by `rotate_world`.
+    #[inline]
+    fn inverse(&self, x: f64, z: f64) -> (f64, f64) {
+        let dx = x - self.center_x;
+        let dz = z - self.center_z;
+        (
+            dx * self.cos_r - dz * self.sin_r + self.center_x,
+            dx * self.sin_r + dz * self.cos_r + self.center_z,
+        )
+    }
 }
 
 impl BathymetryGrid {
@@ -237,12 +287,21 @@ impl BathymetryGrid {
             min_z,
             cell_size_blocks,
             interpolation: BathymetryInterpolation::default(),
+            rotation: None,
         })
     }
 
     /// Selects how the lattice is sampled. Defaults to [`BathymetryInterpolation::Bilinear`].
     pub fn with_interpolation(mut self, interpolation: BathymetryInterpolation) -> Self {
         self.interpolation = interpolation;
+        self
+    }
+
+    /// Attaches the world rotation used when the grid was generated. Samples are
+    /// requested in final world coordinates and inverse-rotated into the stored
+    /// pre-rotation lattice. A zero/non-finite angle leaves the grid unrotated.
+    pub fn with_rotation(mut self, angle_degrees: f64, center_x: f64, center_z: f64) -> Self {
+        self.rotation = BathymetryRotation::new(angle_degrees, center_x, center_z);
         self
     }
 
@@ -276,20 +335,33 @@ impl BathymetryGrid {
     /// Samples the bathymetry surface at world X/Z, returning metres below the
     /// local water datum, or `None` outside the grid or an all-NoData neighbourhood.
     pub fn sample_depth_m(&self, x: i32, z: i32) -> Option<f32> {
-        let lx = i64::from(x) - i64::from(self.min_x);
-        let lz = i64::from(z) - i64::from(self.min_z);
-        let span_x = self.width * self.cell_size_blocks;
-        let span_z = self.height * self.cell_size_blocks;
-        if lx < 0 || lz < 0 || lx as usize >= span_x || lz as usize >= span_z {
+        self.sample_depth_m_at(x as f64, z as f64)
+    }
+
+    /// Float version used after inverse-rotating a final world coordinate. The
+    /// unrotated path keeps the same integer-grid behaviour as before; the
+    /// fractional part only matters for rotated worlds.
+    fn sample_depth_m_at(&self, mut x: f64, mut z: f64) -> Option<f32> {
+        if let Some(rotation) = self.rotation {
+            (x, z) = rotation.inverse(x, z);
+        }
+
+        let lx = x - f64::from(self.min_x);
+        let lz = z - f64::from(self.min_z);
+        let span_x = (self.width * self.cell_size_blocks) as f64;
+        let span_z = (self.height * self.cell_size_blocks) as f64;
+        if lx < 0.0 || lz < 0.0 || lx >= span_x || lz >= span_z {
             return None;
         }
+
         match self.interpolation {
             BathymetryInterpolation::Nearest => {
-                let gx = lx as usize / self.cell_size_blocks;
-                let gz = lz as usize / self.cell_size_blocks;
-                self.depth_value(gx, gz)
+                let cell = self.cell_size_blocks as f64;
+                let gx = (lx / cell).floor() as usize;
+                let gz = (lz / cell).floor() as usize;
+                self.depth_value(gx.min(self.width - 1), gz.min(self.height - 1))
             }
-            BathymetryInterpolation::Bilinear => self.sample_depth_m_bilinear(lx as f64, lz as f64),
+            BathymetryInterpolation::Bilinear => self.sample_depth_m_bilinear(lx, lz),
         }
     }
 
@@ -1213,6 +1285,54 @@ mod tests {
 
         let empty = BathymetryGrid::new(vec![f32::NAN; 4], 2, 2, 0, 0, 10).unwrap();
         assert_eq!(empty.sample_depth_m(5, 5), None);
+    }
+
+    #[test]
+    fn rotated_bathymetry_samples_final_world_coordinates() {
+        // 2x2 lattice with centres at (5,5), (15,5), (5,15), (15,15).
+        // Rotating the world 90° clockwise around (10,10) moves those centres
+        // to (15,5), (15,15), (5,5) and (5,15) respectively.
+        let grid = BathymetryGrid::new(vec![10.0, 20.0, 30.0, 40.0], 2, 2, 0, 0, 10)
+            .unwrap()
+            .with_rotation(90.0, 10.0, 10.0);
+
+        assert_eq!(grid.sample_depth_m(15, 5), Some(10.0));
+        assert_eq!(grid.sample_depth_m(15, 15), Some(20.0));
+        assert_eq!(grid.sample_depth_m(5, 5), Some(30.0));
+        assert_eq!(grid.sample_depth_m(5, 15), Some(40.0));
+
+        // The final envelope has corners that inverse-rotate outside the
+        // pre-rotation lattice. They must be reported as NoData rather than
+        // clamped to an edge value.
+        assert_eq!(grid.sample_depth_m(0, 0), None);
+    }
+
+    #[test]
+    fn rotated_bathymetry_handles_non_cardinal_angles() {
+        let grid = BathymetryGrid::new(vec![10.0, 20.0, 30.0, 40.0], 2, 2, 0, 0, 10)
+            .unwrap()
+            .with_rotation(45.0, 10.0, 10.0);
+
+        // (15, 5) rotated 45° clockwise around (10, 10) lands at about
+        // (17, 10); inverse-rotating the integer point maps back near the
+        // first row's cell centre, not one of the other quadrants.
+        let depth = grid.sample_depth_m(17, 10).unwrap();
+        assert!(
+            (depth - 20.0).abs() < 0.5,
+            "45° rotation mapped the sample to the wrong quadrant: {depth}"
+        );
+    }
+
+    #[test]
+    fn zero_rotation_leaves_bathymetry_unchanged() {
+        let unrotated = BathymetryGrid::new(vec![10.0, 20.0], 2, 1, 0, 0, 10).unwrap();
+        let rotated = BathymetryGrid::new(vec![10.0, 20.0], 2, 1, 0, 0, 10)
+            .unwrap()
+            .with_rotation(0.0, 10.0, 5.0);
+
+        for x in 0..20 {
+            assert_eq!(unrotated.sample_depth_m(x, 5), rotated.sample_depth_m(x, 5));
+        }
     }
 
     #[test]

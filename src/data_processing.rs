@@ -657,24 +657,9 @@ pub fn generate_world_with_options(
         }
     };
 
-    let big_water_field = if args.rotation.abs() > f64::EPSILON {
-        if jegg500_dir.is_some() {
-            if args.legacy_water_depth {
-                eprintln!(
-                    "Warning: J-EGG500 bathymetry is disabled when --rotation is used; \
-                     falling back to shoreline-distance depth."
-                );
-            } else {
-                eprintln!(
-                    "Warning: J-EGG500 bathymetry is disabled when --rotation is used; \
-                     legacy water depth is off, so water will be flat."
-                );
-            }
-        }
-        fallback_water_field()
-    } else if let Some(dir) = jegg500_dir {
+    let big_water_field = if let Some(dir) = jegg500_dir {
         let config = Jegg500Config::new(dir);
-        match jegg500::load_jegg500_for_bbox(&config, &llbbox, &xzbbox, args.scale) {
+        match jegg500::load_jegg500_for_bbox(&config, &llbbox, args.scale, args.rotation) {
             Ok(Some(bathymetry)) => {
                 if args.legacy_water_depth {
                     crate::water_depth::compute_big_water_field_with_bathymetry(
