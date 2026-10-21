@@ -34,6 +34,7 @@ Thumbs.db
 /*debug*.png
 /terrain-tile-cache
 /arnis-tile-cache
+/.playwright-mcp/
 
 /gen/
 /build/
