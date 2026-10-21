@@ -634,15 +634,35 @@ mod tests {
         assert_eq!(prev, c.max_blocks);
     }
 
-    /// Integration test with the real J-EGG500 files shipped in `jegg500/`,
-    /// covering a 1° × 1° tile around central Japan.
+    /// Loads the local real-data tiles used by the integration tests.
+    ///
+    /// `jegg500/` is gitignored because the dataset must not be redistributed,
+    /// so a fresh clone or CI checkout has no tiles. In that case the caller
+    /// skips the test instead of failing. Corrupt or unreadable data still
+    /// fails, because that is a real regression rather than a missing fixture.
+    fn load_real_jegg500(llbbox: &LLBBox, rotation_degrees: f64) -> Option<BathymetryGrid> {
+        let config = Jegg500Config::new("jegg500");
+        match load_jegg500_for_bbox(&config, llbbox, 1.0, rotation_degrees) {
+            Ok(Some(grid)) => Some(grid),
+            Ok(None) => {
+                eprintln!(
+                    "skipping real J-EGG500 test: no J-EGG500 tiles in ./jegg500 \
+                     (the dataset is gitignored and must be downloaded manually)"
+                );
+                None
+            }
+            Err(e) => panic!("real J-EGG500 data failed to load: {e}"),
+        }
+    }
+
+    /// Integration test with the local J-EGG500 files in `jegg500/`, covering a
+    /// 1° × 1° tile around central Japan. Skipped when the gitignored data is absent.
     #[test]
     fn load_real_jegg500_files_produces_grid() {
-        let config = Jegg500Config::new("jegg500");
         let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
-        let grid = load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0)
-            .unwrap()
-            .expect("real J-EGG500 files should load successfully");
+        let Some(grid) = load_real_jegg500(&llbbox, 0.0) else {
+            return;
+        };
         // Derive the expected lattice from the same geographic extent the map
         // uses: ~91 km east-west and ~111 km north-south at this latitude.
         let (_, source_bbox) = CoordTransformer::llbbox_to_xzbbox(&llbbox, 1.0).unwrap();
@@ -660,14 +680,12 @@ mod tests {
     /// its rotated final-world position.
     #[test]
     fn rotated_real_jegg500_samples_align_with_rotated_world() {
-        let config = Jegg500Config::new("jegg500");
         let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
-        let source = load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0)
-            .unwrap()
-            .expect("real J-EGG500 files should load successfully");
-        let rotated = load_jegg500_for_bbox(&config, &llbbox, 1.0, 90.0)
-            .unwrap()
-            .expect("real J-EGG500 files should load successfully");
+        let Some(source) = load_real_jegg500(&llbbox, 0.0) else {
+            return;
+        };
+        let rotated = load_real_jegg500(&llbbox, 90.0)
+            .expect("rotation must not change whether local J-EGG500 data is available");
 
         // Rotation must not expand or resample the source lattice.
         assert_eq!(
@@ -720,11 +738,10 @@ mod tests {
     /// both `mesh500_34_136.txt` and `mesh500_35_136.txt` are loaded into the grid.
     #[test]
     fn load_multiple_real_jegg500_tiles() {
-        let config = Jegg500Config::new("jegg500");
         let llbbox = LLBBox::new(34.0, 136.0, 36.0, 137.0).unwrap();
-        let grid = load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0)
-            .unwrap()
-            .expect("real J-EGG500 files should load successfully");
+        let Some(grid) = load_real_jegg500(&llbbox, 0.0) else {
+            return;
+        };
         let (_, source_bbox) = CoordTransformer::llbbox_to_xzbbox(&llbbox, 1.0).unwrap();
         let expected_width =
             ((source_bbox.max_x() - source_bbox.min_x() + 1) as usize).div_ceil(500);
@@ -750,11 +767,10 @@ mod tests {
     /// boundary instead of keeping the nearest-cell step.
     #[test]
     fn real_data_blends_at_cell_boundary() {
-        let config = Jegg500Config::new("jegg500");
         let llbbox = LLBBox::new(34.0, 136.0, 35.0, 137.0).unwrap();
-        let grid = load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0)
-            .unwrap()
-            .expect("real J-EGG500 files should load successfully");
+        let Some(grid) = load_real_jegg500(&llbbox, 0.0) else {
+            return;
+        };
         let nearest = grid
             .clone()
             .with_interpolation(BathymetryInterpolation::Nearest);
