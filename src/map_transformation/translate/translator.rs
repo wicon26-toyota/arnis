@@ -65,8 +65,63 @@ pub fn translate_by_vector(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coordinate_system::cartesian::XZVector;
-    use crate::test_utilities::generate_default_example;
+    use crate::coordinate_system::cartesian::{XZBBox, XZVector};
+    use crate::osm_parser::{
+        ProcessedElement, ProcessedMember, ProcessedMemberRole, ProcessedNode, ProcessedRelation,
+        ProcessedWay,
+    };
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    /// Local fixture covering every element kind, so the test does not depend
+    /// on a live Overpass request.
+    fn fixture_elements() -> Vec<ProcessedElement> {
+        let tags = HashMap::from([("fixture".to_string(), "yes".to_string())]);
+        let relation_way = ProcessedWay {
+            id: 5,
+            tags: HashMap::new(),
+            nodes: vec![ProcessedNode {
+                id: 6,
+                tags: HashMap::new(),
+                x: 3,
+                z: 4,
+            }],
+        };
+        vec![
+            ProcessedElement::Node(ProcessedNode {
+                id: 1,
+                tags: tags.clone(),
+                x: 10,
+                z: 20,
+            }),
+            ProcessedElement::Way(ProcessedWay {
+                id: 2,
+                tags: tags.clone(),
+                nodes: vec![
+                    ProcessedNode {
+                        id: 3,
+                        tags: HashMap::new(),
+                        x: -5,
+                        z: 7,
+                    },
+                    ProcessedNode {
+                        id: 4,
+                        tags: HashMap::new(),
+                        x: 42,
+                        z: -13,
+                    },
+                ],
+            }),
+            ProcessedElement::Relation(ProcessedRelation {
+                id: 7,
+                tags,
+                members: vec![ProcessedMember {
+                    role: ProcessedMemberRole::Outer,
+                    way: Arc::new(relation_way),
+                }],
+            }),
+        ]
+    }
 
     // this ensures translate_by_vector function is correct
     #[test]
@@ -75,12 +130,18 @@ mod tests {
         let dz: i32 = -234;
         let vector = XZVector { dx, dz };
 
-        let (xzbbox1, elements1) = generate_default_example();
+        let xzbbox1 = XZBBox::rect_from_min_max(0, 0, 100, 100).unwrap();
+        let elements1 = fixture_elements();
 
         let mut xzbbox2 = xzbbox1.clone();
         let mut elements2 = elements1.clone();
 
         translate_by_vector(vector, &mut elements2, &mut xzbbox2);
+
+        assert_eq!(xzbbox2.min_x(), xzbbox1.min_x() + dx);
+        assert_eq!(xzbbox2.max_x(), xzbbox1.max_x() + dx);
+        assert_eq!(xzbbox2.min_z(), xzbbox1.min_z() + dz);
+        assert_eq!(xzbbox2.max_z(), xzbbox1.max_z() + dz);
 
         // 1. Elem type should not change
         // 2. For node,

@@ -21,9 +21,21 @@ pub fn set_progress_suppressed(suppressed: bool) {
     if suppressed {
         SUPPRESS_COUNT.fetch_add(1, Ordering::Relaxed);
     } else {
-        let _ = SUPPRESS_COUNT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-            Some(v.saturating_sub(1))
-        });
+        // Saturating decrement without `fetch_update`, whose deprecated alias is
+        // rejected by `clippy -D warnings` on current stable.
+        let mut current = SUPPRESS_COUNT.load(Ordering::Relaxed);
+        loop {
+            let next = current.saturating_sub(1);
+            match SUPPRESS_COUNT.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
     }
 }
 

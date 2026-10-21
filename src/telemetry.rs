@@ -49,12 +49,22 @@ struct SendSlot;
 
 impl SendSlot {
     fn acquire() -> Option<Self> {
-        SENDS_IN_FLIGHT
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < MAX_SENDS_IN_FLIGHT).then_some(n + 1)
-            })
-            .ok()
-            .map(|_| Self)
+        // Manual CAS loop instead of the deprecated `fetch_update` alias.
+        let mut current = SENDS_IN_FLIGHT.load(Ordering::Acquire);
+        loop {
+            if current >= MAX_SENDS_IN_FLIGHT {
+                return None;
+            }
+            match SENDS_IN_FLIGHT.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(Self),
+                Err(actual) => current = actual,
+            }
+        }
     }
 }
 
