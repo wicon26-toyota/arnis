@@ -303,15 +303,14 @@
 
 
 
-        <!-- World Scale Slider -->
+        <!-- World Scale -->
         <div class="settings-row">
-          <label for="scale-value-slider">
+          <label for="scale-value-input">
             <span data-localize="world_scale">World Scale</span>
             <span class="tooltip-icon" data-tooltip="Scale factor for the generated world (1.0 = real-world scale)">?</span>
           </label>
-          <div class="settings-control">
-            <input type="range" id="scale-value-slider" name="scale-value-slider" min="0.05" max="2.5" step="0.05" value="1">
-            <span id="slider-value">1.00</span>
+          <div class="settings-control rotation-control scale-control">
+            <input type="number" id="scale-value-input" name="scale-value-input" min="0.002" max="2.5" step="0.001" value="1">
           </div>
         </div>
         <div class="settings-row" id="scale-objects-note" style="display: none;">

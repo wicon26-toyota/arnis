@@ -676,23 +676,8 @@ input[type="range"] {
 
 .terrain-toggle-container,
 .fillground-toggle-container,
-.interior-toggle-container,
-.scale-slider-container {
+.interior-toggle-container {
   margin: 15px 0;
-}
-
-.scale-slider-container label {
-  display: block;
-  margin-bottom: 5px;
-}
-
-#scale-value-slider {
-  accent-color: #fecc44;
-}
-
-#slider-value {
-  margin-left: 10px;
-  font-weight: bold;
 }
 
 .bbox-input-container {
@@ -901,6 +886,12 @@ input[type="range"] {
   max-width: 60px !important;
   text-align: center;
   font-weight: bold;
+}
+
+/* Wider than the rotation field so values like 0.002 fit next to the spinner. */
+.scale-control input[type="number"] {
+  width: 90px !important;
+  max-width: 90px !important;
 }
 
 /* Segmented control (game mode) */

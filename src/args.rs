@@ -279,9 +279,9 @@ impl GenerationMode {
 /// pillars, and fixed-size props come to dominate the scene. Objects are skipped instead.
 pub const OBJECT_SKIP_SCALE: f64 = 0.3;
 
-/// Smallest usable scale. Below this a country-sized bbox degenerates into a few hundred
-/// blocks and terrain detail is lost entirely.
-pub const MIN_SCALE: f64 = 0.05;
+/// Smallest usable scale. 0.002 renders even a city-sized bbox as a miniature model;
+/// terrain detail is coarse, but the world is still valid.
+pub const MIN_SCALE: f64 = 0.002;
 /// Largest usable scale. Beyond this a single square kilometer already costs GBs and hours.
 pub const MAX_SCALE: f64 = 4.0;
 
@@ -664,6 +664,15 @@ mod tests {
         assert!(gl(bedrock_dhl, 496).is_ok());
         assert!(gl(bedrock_dhl, 497).is_err());
         assert!(gl(bedrock_dhl, -63).is_err());
+    }
+
+    #[test]
+    fn scale_accepts_milliscale_worlds() {
+        assert!(validate_scale(0.002).is_ok());
+        assert!(validate_scale(0.001).is_err());
+        assert!(validate_scale(2.5).is_ok());
+        assert!(validate_scale(4.0).is_ok());
+        assert!(validate_scale(4.001).is_err());
     }
 
     #[test]

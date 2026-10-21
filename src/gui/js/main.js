@@ -49,7 +49,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   initSettings();
   initVoxyLightingCoupling();
   initHeightLimitNote();
-  // After initSettings(), so the slider label and rotation handlers exist
+  // After initSettings(), so the scale note and rotation handlers exist
   // before restored values are applied. Labels get localized a few lines below.
   initSettingsStore({ resetWorldFormat: () => setWorldFormat('java') });
   resolveDefaultSavePath();
@@ -416,7 +416,7 @@ const EARTH_ONLY_SETTINGS = [
   'interior-toggle',
   'canopy-height-toggle',
   'legacy-trees-toggle',
-  'scale-value-slider',
+  'scale-value-input',
   'aws-only-elevation-toggle',
   'disable-height-limit-toggle',
   'jegg500-enabled-toggle',
@@ -893,8 +893,7 @@ function resolveDefaultSavePath() {
 function initSettings() {
   // Settings
   const settingsModal = document.getElementById("settings-modal");
-  const slider = document.getElementById("scale-value-slider");
-  const sliderValue = document.getElementById("slider-value");
+  const scaleInput = document.getElementById("scale-value-input");
 
   // Open settings modal
   function openSettings() {
@@ -938,21 +937,14 @@ function initSettings() {
   const scaleObjectsNote = document.getElementById("scale-objects-note");
 
   function refreshScaleDisplay() {
-    const value = parseFloat(slider.value);
-    sliderValue.textContent = value.toFixed(2);
+    const value = parseFloat(scaleInput.value);
     if (scaleObjectsNote) {
-      scaleObjectsNote.style.display = value < OBJECT_SKIP_SCALE ? "" : "none";
+      scaleObjectsNote.style.display =
+        Number.isFinite(value) && value < OBJECT_SKIP_SCALE ? "" : "none";
     }
   }
 
-  slider.addEventListener("input", refreshScaleDisplay);
-  // Double-click to reset world scale to default (1.00).
-  // Assigning .value fires no event, so dispatch them for the label and store.
-  slider.addEventListener("dblclick", () => {
-    slider.value = 1;
-    slider.dispatchEvent(new Event("input", { bubbles: true }));
-    slider.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  scaleInput.addEventListener("input", refreshScaleDisplay);
   refreshScaleDisplay();
 
   // Game mode segmented control
@@ -2199,7 +2191,7 @@ async function startGeneration() {
     var jegg500_interpolation = !jegg500InterpolationToggle.disabled && jegg500InterpolationToggle.checked;
     var legacyWaterDepthToggle = document.getElementById("legacy-water-depth-toggle");
     var legacy_water_depth = !legacyWaterDepthToggle.disabled && legacyWaterDepthToggle.checked;
-    var scale = parseFloat(document.getElementById("scale-value-slider").value);
+    var scale = parseFloat(document.getElementById("scale-value-input").value);
     // var ground_level = parseInt(document.getElementById("ground-level").value, 10);
     // DEPRECATED: Ground level input removed from UI
     var ground_level = -62;
