@@ -2191,6 +2191,11 @@ async function startGeneration() {
     var jegg500_interpolation = !jegg500InterpolationToggle.disabled && jegg500InterpolationToggle.checked;
     var legacyWaterDepthToggle = document.getElementById("legacy-water-depth-toggle");
     var legacy_water_depth = !legacyWaterDepthToggle.disabled && legacyWaterDepthToggle.checked;
+    // Read the input rather than the cached value: the change handler validates
+    // the path asynchronously, so clicking Start right after typing could
+    // otherwise send the previous directory.
+    var jegg500PathInput = document.getElementById("jegg500-dir-input");
+    var jegg500_dir = jegg500PathInput ? jegg500PathInput.value.trim() : "";
     var scale = parseFloat(document.getElementById("scale-value-input").value);
     // var ground_level = parseInt(document.getElementById("ground-level").value, 10);
     // DEPRECATED: Ground level input removed from UI
@@ -2248,7 +2253,7 @@ async function startGeneration() {
         jegg500Enabled: jegg500_enabled,
         jegg500Interpolation: jegg500_interpolation,
         legacyWaterDepthEnabled: legacy_water_depth,
-        jegg500Dir: jegg500Dir
+        jegg500Dir: jegg500_dir
     });
 
     console.log("Generation process started.");
