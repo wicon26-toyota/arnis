@@ -803,6 +803,8 @@ function setupProgressListener() {
         generationButtonEnabled = true;
         window.arnisPreview3D?.setGenerationRunning(false);
         resetEta();
+      } else if (message.startsWith("Warning:")) {
+        progressInfo.style.color = "#fecc44";
       } else {
         progressInfo.style.color = "#ececec";
       }

@@ -657,6 +657,7 @@ pub fn generate_world_with_options(
         }
     };
 
+    let mut water_warning: Option<String> = None;
     let big_water_field = if let Some(dir) = jegg500_dir {
         let interpolation = if args.jegg500_interpolation {
             JeggInterpolation::Bilinear
@@ -683,33 +684,37 @@ pub fn generate_world_with_options(
                 }
             }
             Ok(None) => {
-                if args.legacy_water_depth {
-                    eprintln!(
-                        "Warning: no J-EGG500 bathymetry files found in {}; \
+                let warning = if args.legacy_water_depth {
+                    format!(
+                        "Warning: no usable J-EGG500 bathymetry data found in {}; \
                          using shoreline-distance depth.",
                         dir.display()
-                    );
+                    )
                 } else {
-                    eprintln!(
-                        "Warning: no J-EGG500 bathymetry files found in {}; \
+                    format!(
+                        "Warning: no usable J-EGG500 bathymetry data found in {}; \
                          legacy water depth is off, so water will be flat.",
                         dir.display()
-                    );
-                }
+                    )
+                };
+                eprintln!("{warning}");
+                water_warning = Some(warning);
                 fallback_water_field()
             }
             Err(e) => {
-                if args.legacy_water_depth {
-                    eprintln!(
+                let warning = if args.legacy_water_depth {
+                    format!(
                         "Warning: failed to load J-EGG500 bathymetry: {e}; \
                          using shoreline-distance depth."
-                    );
+                    )
                 } else {
-                    eprintln!(
+                    format!(
                         "Warning: failed to load J-EGG500 bathymetry: {e}; \
                          legacy water depth is off, so water will be flat."
-                    );
-                }
+                    )
+                };
+                eprintln!("{warning}");
+                water_warning = Some(warning);
                 fallback_water_field()
             }
         }
@@ -721,6 +726,9 @@ pub fn generate_world_with_options(
 
     println!("{} Processing data...", "[4/7]".bold());
     emit_gui_progress_update(19.5, "Processing data...");
+    if let Some(warning) = &water_warning {
+        emit_gui_progress_update(19.5, warning);
+    }
 
     // Build highway connectivity map once before processing
     let highway_connectivity = highways::build_highway_connectivity_map(&elements);
