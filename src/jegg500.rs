@@ -319,6 +319,7 @@ pub fn load_jegg500_for_bbox(
     let mut any_sample = false;
     let mut files_read = 0usize;
     let mut samples_read = 0usize;
+    let mut first_tile_error: Option<String> = None;
     let tile_paths = overlapping_tile_paths(&config.base_dir, llbbox);
 
     for path in &tile_paths {
@@ -326,7 +327,19 @@ pub fn load_jegg500_for_bbox(
             continue;
         }
         any_file = true;
-        let tile_samples = read_tile_file(path)?;
+        let tile_samples = match read_tile_file(path) {
+            Ok(samples) => samples,
+            Err(e) => {
+                eprintln!(
+                    "Warning: skipping unreadable J-EGG500 tile {}: {e}",
+                    path.display()
+                );
+                if first_tile_error.is_none() {
+                    first_tile_error = Some(e);
+                }
+                continue;
+            }
+        };
         samples_read += tile_samples.len();
         files_read += 1;
         for sample in tile_samples {
@@ -345,6 +358,12 @@ pub fn load_jegg500_for_bbox(
     }
 
     if !any_file {
+        return Ok(None);
+    }
+    if files_read == 0 {
+        if let Some(error) = first_tile_error {
+            return Err(format!("failed to read J-EGG500 tile data: {error}"));
+        }
         return Ok(None);
     }
     if !any_sample {
@@ -382,6 +401,14 @@ pub fn load_jegg500_for_bbox(
         config.interpolation,
         rotation_degrees,
     );
+
+    if populated_cells == 0 {
+        eprintln!(
+            "Warning: J-EGG500 tiles contained no samples inside the generated area; \
+             ignoring bathymetry."
+        );
+        return Ok(None);
+    }
 
     Ok(Some(
         BathymetryGrid::new(
@@ -539,6 +566,85 @@ mod tests {
         assert!(load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn load_local_tile_file_end_to_end() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("mesh500_0_0.txt"),
+            "0 0.002 0.002 10\n\
+             0 0.008 0.002 20\n\
+             0 0.002 0.008 30\n",
+        )
+        .unwrap();
+
+        let config = Jegg500Config::new(dir.path());
+        let llbbox = LLBBox::new(0.0, 0.0, 0.01, 0.01).unwrap();
+        let grid = load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0)
+            .unwrap()
+            .expect("a local tile file must produce a bathymetry grid");
+
+        assert_eq!(grid.cell_size_blocks(), 500);
+        let cell = grid.cell_size_blocks() as i32;
+        let center = |gx: usize, gz: usize| {
+            (
+                grid.min_x() + gx as i32 * cell + cell / 2,
+                grid.min_z() + gz as i32 * cell + cell / 2,
+            )
+        };
+
+        let (x, z) = center(0, 1);
+        assert_eq!(grid.sample_depth_m(x, z), Some(10.0));
+        let (x, z) = center(0, 0);
+        assert_eq!(grid.sample_depth_m(x, z), Some(20.0));
+        let (x, z) = center(1, 1);
+        assert_eq!(grid.sample_depth_m(x, z), Some(30.0));
+    }
+
+    #[test]
+    fn unreadable_tile_is_skipped_when_another_tile_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("mesh500_0_0.txt"), "0 0.002 0.002 12\n").unwrap();
+        std::fs::write(dir.path().join("mesh500_0_1.txt"), "not a jegg500 record\n").unwrap();
+
+        let config = Jegg500Config::new(dir.path());
+        let llbbox = LLBBox::new(0.0, 0.0, 0.01, 0.01).unwrap();
+        let grid = load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0)
+            .unwrap()
+            .expect("a readable tile must still produce a grid");
+
+        let cell = grid.cell_size_blocks() as i32;
+        let x = grid.min_x() + cell / 2;
+        let z = grid.min_z() + cell + cell / 2;
+        assert_eq!(grid.sample_depth_m(x, z), Some(12.0));
+    }
+
+    #[test]
+    fn all_unreadable_tiles_return_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("mesh500_0_0.txt"), "not a jegg500 record\n").unwrap();
+
+        let config = Jegg500Config::new(dir.path());
+        let llbbox = LLBBox::new(0.0, 0.0, 0.01, 0.01).unwrap();
+        match load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0) {
+            Err(e) => assert!(e.contains("failed to read J-EGG500 tile data"), "{e}"),
+            Ok(_) => panic!("all-unreadable tile data must return an error"),
+        }
+    }
+
+    #[test]
+    fn samples_outside_bbox_yield_none() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("mesh500_0_0.txt"), "0 10.0 10.0 100\n").unwrap();
+
+        let config = Jegg500Config::new(dir.path());
+        let llbbox = LLBBox::new(0.0, 0.0, 0.01, 0.01).unwrap();
+        match load_jegg500_for_bbox(&config, &llbbox, 1.0, 0.0) {
+            Ok(None) => {}
+            Ok(Some(_)) => panic!("samples outside the bbox must not create a grid"),
+            Err(e) => panic!("out-of-bbox samples must not be treated as corruption: {e}"),
+        }
     }
 
     #[test]
