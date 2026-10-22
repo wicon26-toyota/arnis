@@ -132,12 +132,11 @@ impl BigWaterField {
     /// Max depth in the 7x7 around (x, z); proxy for body width. Edge-safe via depth_at.
     pub fn body_max_7x7(&self, x: i32, z: i32) -> i32 {
         let mut m = 0;
+        // Scan the whole window: bathymetry depths can exceed the legacy
+        // shoreline cap, and MAX_WATER_DEPTH is only the u8 storage limit.
         for dz in -3..=3 {
             for dx in -3..=3 {
                 m = m.max(self.depth_at(x + dx, z + dz));
-                if m >= MAX_WATER_DEPTH {
-                    return m;
-                }
             }
         }
         m
