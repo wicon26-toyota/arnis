@@ -6,7 +6,7 @@
 
 Arnis は、OpenStreetMap の地理データと標高データから、実在する街並みを Minecraft のワールドとして生成するツールです。Java Edition / Bedrock Edition / Luanti（Minetest）に対応しています。
 
-このリポジトリは **`feature/jegg500-bathymetry`** ブランチです。日本周辺の海域に J-EGG500 の実測海底地形を反映するため、次の機能を追加しています。
+このリポジトリは **`feature/jegg500-bathymetry`** ブランチです。日本周辺の海域に J-EGG500 の海底地形データを反映するため、次の機能を追加しています。
 
 - J-EGG500（500 m メッシュ）の海底地形読み込み
 - セル間の双線形補間（ON/OFF 切り替え可能）と、欠損データ時のフォールバック
@@ -18,7 +18,7 @@ Arnis は、OpenStreetMap の地理データと標高データから、実在す
 
 - OpenStreetMap の建物・道路・土地利用などを反映したワールド生成
 - 標高データを使った地形生成
-- 日本周辺の実測水深を反映する J-EGG500 対応
+- 日本周辺の J-EGG500 水深データを反映する海底地形生成
 - Java Edition / Bedrock Edition / Luanti（Minetest）向けの出力
 - デスクトップ GUI と CLI の両方から実行可能
 
@@ -135,7 +135,7 @@ nix run . -- \
 
 ## J-EGG500 海底地形データの利用
 
-日本周辺の海域で実測水深を反映するには、J-EGG500（500 m メッシュの海底地形データ）をダウンロードして配置します。
+日本周辺の海域で J-EGG500 の水深データを反映するには、J-EGG500（500 m メッシュの海底地形データ）をダウンロードして配置します。
 
 > **データの取り扱いについて**
 >
@@ -144,6 +144,8 @@ nix run . -- \
 > <https://www.jodc.go.jp/jodcweb/JDOSS/caution_j.html>
 >
 > ダウンロードしたデータをこのリポジトリへコミットしたり、第三者へ再配布したりしないでください。`jegg500/` ディレクトリは `.gitignore` に登録されており、Git の管理対象外になっています。
+>
+> J-EGG500 を利用した成果物を公開する場合は、「日本海洋データセンター」の資料を使用した旨を明記し、成果物1部を JODC に提出してください。
 
 ### 1. データをダウンロードする
 
@@ -173,7 +175,7 @@ jegg500/
 
 Settings の **水** セクションで、次の 3 つを切り替えられます。どれも初期状態はオンです。
 
-- **J-EGG500 海底地形**: **J-EGG500 データフォルダ** に置いた実測データを使うかどうか。オフにしてもフォルダの設定は保持されます。
+- **J-EGG500 海底地形**: **J-EGG500 データフォルダ** に置いた J-EGG500 データを使うかどうか。オフにしてもフォルダの設定は保持されます。
 - **海底地形の補間（バイリニア）**: 500 m メッシュのセル間を双線形補間して滑らかにするかどうか。オフにすると最近傍セルの値を使います。
 - **従来の水深生成**: 海岸線からの距離で水深を推定する従来方式を使うかどうか。J-EGG500 のデータが欠けている海域のフォールバックとして使われます。
 
@@ -196,8 +198,8 @@ cargo run --release --no-default-features -- \
 
 | J-EGG500 海底地形 | 従来の水深生成 | 結果 |
 | --- | --- | --- |
-| ON | ON | J-EGG500 がある海域は実測水深。欠損している海域は従来の推定水深で補完 |
-| ON | OFF | J-EGG500 がある海域だけ実測水深。それ以外の海域はフラットな水 |
+| ON | ON | J-EGG500 がある海域は J-EGG500 の水深データ。欠損している海域は従来の推定水深で補完 |
+| ON | OFF | J-EGG500 がある海域だけ J-EGG500 の水深データ。それ以外の海域はフラットな水 |
 | OFF | ON | すべての海域で従来の推定水深 |
 | OFF | OFF | すべての海域でフラットな水 |
 
@@ -211,6 +213,8 @@ cargo run --release --no-default-features -- \
 Copyright (c) 2022-2026 Louis Erbkamm (louis-e)
 
 Apache License 2.0 の下で配布されています。詳細は [LICENSE](LICENSE) を参照してください。
+
+J-EGG500 のデータは日本海洋データセンター（JODC）から提供されています。本プロジェクトは J-EGG500 の生データを同梱・再配布しません。J-EGG500 を利用して作成した成果物を公開する場合は、出典として「日本海洋データセンター」の資料を使用した旨を明記し、成果物1部を JODC に提出してください。詳細は JODC の「海洋データ・情報の使用上の注意」を参照してください。
 
 The Luanti block-name mapping in `src/luanti_block_map.rs` is derived from [MC2MT](https://github.com/rollerozxa/MC2MT) by rollerozxa and is licensed under the GNU Lesser General Public License v2.1 or later. The full attribution and license header are preserved in that file.
 

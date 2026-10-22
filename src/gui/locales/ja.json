@@ -61,6 +61,7 @@
   "jegg500_enabled": "J-EGG500 海底地形",
   "jegg500_dir": "J-EGG500 データフォルダ",
   "jegg500_interpolation": "海底地形の補間（バイリニア）",
+  "jegg500_data_note": "J-EGG500 のデータは日本海洋データセンター（JODC）提供です。成果物には出典を明記し、JODC へ写しを提出してください。",
   "legacy_water_depth": "従来の水深生成",
   "bake_lighting": "ライティングをベイク",
   "voxy_lod": "Voxy LODを事前生成",

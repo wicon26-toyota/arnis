@@ -68,6 +68,7 @@
   "jegg500_enabled": "J-EGG500 Bathymetry",
   "jegg500_dir": "J-EGG500 Data Directory",
   "jegg500_interpolation": "Smooth Bathymetry Interpolation",
+  "jegg500_data_note": "J-EGG500 data is provided by the Japan Oceanographic Data Center (JODC). Credit JODC in published results and submit one copy to JODC.",
   "legacy_water_depth": "Legacy Water Depth",
   "bake_lighting": "Bake lighting",
   "voxy_lod": "Pre-generate Voxy LOD",

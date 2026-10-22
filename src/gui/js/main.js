@@ -140,6 +140,7 @@ async function applyLocalization(localization) {
     "span[data-localize='jegg500_enabled']": "jegg500_enabled",
     "span[data-localize='jegg500_dir']": "jegg500_dir",
     "span[data-localize='jegg500_interpolation']": "jegg500_interpolation",
+    "div[data-localize='jegg500_data_note']": "jegg500_data_note",
     "span[data-localize='legacy_water_depth']": "legacy_water_depth",
     "span[data-localize='anonymous_crash_reports']": "anonymous_crash_reports",
     "span[data-localize='map_theme']": "map_theme",
