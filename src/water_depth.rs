@@ -797,9 +797,7 @@ pub fn carve_water_column(
     let depth = depth
         .clamp(0, MAX_WATER_DEPTH)
         .min((water_y - min_y() - 2).max(0));
-    for dy in 0..=depth {
-        editor.set_block_absolute(WATER, x, water_y - dy, z, None, Some(&[]));
-    }
+    editor.fill_column_absolute(WATER, x, z, water_y - depth, water_y, false);
     clear_stranded_vegetation(editor, x, z, water_y);
     let bed_y = water_y - depth - 1;
 
