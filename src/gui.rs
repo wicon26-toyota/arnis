@@ -1163,6 +1163,7 @@ fn gui_start_generation(
     jegg500_enabled: bool,
     jegg500_interpolation: bool,
     legacy_water_depth_enabled: bool,
+    underwater_detail_enabled: bool,
     jegg500_dir: String,
 ) -> Result<(), String> {
     use progress::emit_gui_error;
@@ -1490,6 +1491,7 @@ fn gui_start_generation(
                 jegg500_enabled,
                 jegg500_interpolation,
                 legacy_water_depth: legacy_water_depth_enabled,
+                underwater_detail: underwater_detail_enabled,
                 jegg500_dir: {
                     let dir = jegg500_dir.trim();
                     if dir.is_empty() {

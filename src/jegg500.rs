@@ -16,7 +16,7 @@
 //! does not assume any API, and does not redistribute the raw dataset.
 
 use crate::coordinate_system::cartesian::{XZBBox, XZPoint};
-use crate::coordinate_system::geographic::LLBBox;
+use crate::coordinate_system::geographic::{LLBBox, LLPoint};
 use crate::coordinate_system::transformation::CoordTransformer;
 use crate::water_depth::{BathymetryGrid, BathymetryInterpolation, NonlinearDepthCompression};
 use std::collections::HashMap;
@@ -238,48 +238,132 @@ fn xzbbox_to_grid_bounds(
     Ok((min_x, min_z, width, height))
 }
 
-/// Map a J-EGG500 sample to a grid cell and accumulate the depth.
-#[allow(clippy::too_many_arguments)]
-fn accumulate_sample(
-    sample: &JeggSample,
-    transformer: &CoordTransformer,
+/// One J-EGG500 sample projected into pre-rotation world X/Z coordinates.
+#[derive(Debug, Clone, Copy)]
+struct ProjectedSample {
+    x: i32,
+    z: i32,
+    depth_m: f32,
+}
+
+/// Maximum distance, in grid cells, between a cell centre and the nearest
+/// source sample for that sample to fill the cell. J-EGG500 samples sit about
+/// one cell apart, so this covers the half-cell offset between the rotated
+/// source lattice and the axis-aligned world grid while leaving true NoData
+/// (a genuinely empty area) alone.
+const MAX_SAMPLE_FILL_DISTANCE_CELLS: f64 = 1.5;
+
+/// Project a raw J-EGG500 sample into pre-rotation world X/Z coordinates.
+fn project_sample(sample: &JeggSample, transformer: &CoordTransformer) -> Option<ProjectedSample> {
+    let llpoint = LLPoint::new(sample.lat, sample.lon).ok()?;
+    let XZPoint { x, z } = transformer.transform_point(llpoint);
+    Some(ProjectedSample {
+        x,
+        z,
+        depth_m: sample.depth_m,
+    })
+}
+
+#[inline]
+fn bin_index(value: i32, origin: i32, cell_size_blocks: usize) -> i32 {
+    let relative = i64::from(value) - i64::from(origin);
+    relative.div_euclid(cell_size_blocks as i64) as i32
+}
+
+/// Rasterize projected samples by assigning each grid cell the **nearest**
+/// source sample within [`MAX_SAMPLE_FILL_DISTANCE_CELLS`].
+///
+/// Binning a sample by the cell that happens to contain it leaves holes: the
+/// J-EGG500 lattice is rotated relative to world X/Z and can be offset by half
+/// a cell, so some cells receive no sample while others receive several.
+/// Selecting the nearest sample for every cell fills those holes and avoids
+/// averaging two unrelated depths into a value that is not in the source.
+fn rasterize_samples(
+    samples: &[ProjectedSample],
     grid_origin_x: i32,
     grid_origin_z: i32,
-    cell_size_blocks: usize,
     grid_width: usize,
     grid_height: usize,
-    sums: &mut HashMap<(usize, usize), (f64, u32)>,
-) {
-    use crate::coordinate_system::geographic::LLPoint;
-    let llpoint = match LLPoint::new(sample.lat, sample.lon) {
-        Ok(p) => p,
-        Err(_) => return,
-    };
-    let XZPoint { x, z } = transformer.transform_point(llpoint);
-
-    let lx = i64::from(x) - i64::from(grid_origin_x);
-    let lz = i64::from(z) - i64::from(grid_origin_z);
-    if lx < 0 || lz < 0 {
-        return;
-    }
-    let gx = lx as usize / cell_size_blocks;
-    let gz = lz as usize / cell_size_blocks;
-    if gx >= grid_width || gz >= grid_height {
-        return;
+    cell_size_blocks: usize,
+) -> Vec<f32> {
+    let mut depth_m = vec![f32::NAN; grid_width.saturating_mul(grid_height)];
+    if samples.is_empty() || cell_size_blocks == 0 || grid_width == 0 || grid_height == 0 {
+        return depth_m;
     }
 
-    let entry = sums.entry((gx, gz)).or_insert((0.0, 0));
-    entry.0 += f64::from(sample.depth_m);
-    entry.1 += 1;
+    // Keep a one-cell margin so samples just outside the world can still
+    // populate the outermost grid cells.
+    let mut bins: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    for (index, sample) in samples.iter().enumerate() {
+        let gx = bin_index(sample.x, grid_origin_x, cell_size_blocks);
+        let gz = bin_index(sample.z, grid_origin_z, cell_size_blocks);
+        if (-1..=grid_width as i32).contains(&gx) && (-1..=grid_height as i32).contains(&gz) {
+            bins.entry((gx, gz)).or_default().push(index);
+        }
+    }
+
+    let cell = cell_size_blocks as f64;
+    let max_distance_sq = (MAX_SAMPLE_FILL_DISTANCE_CELLS * cell).powi(2);
+
+    for gz in 0..grid_height {
+        for gx in 0..grid_width {
+            let centre_x = f64::from(grid_origin_x) + (gx as f64 + 0.5) * cell;
+            let centre_z = f64::from(grid_origin_z) + (gz as f64 + 0.5) * cell;
+            let mut best: Option<(f64, usize)> = None;
+
+            // The centre sits in the middle of its own bin, so a sample within
+            // 1.5 cells can be up to two bins away; search a 5x5 neighbourhood.
+            for dz in -2..=2 {
+                for dx in -2..=2 {
+                    let Some(indices) = bins.get(&(gx as i32 + dx, gz as i32 + dz)) else {
+                        continue;
+                    };
+                    for &index in indices {
+                        let sample = &samples[index];
+                        let ddx = f64::from(sample.x) - centre_x;
+                        let ddz = f64::from(sample.z) - centre_z;
+                        let distance_sq = ddx * ddx + ddz * ddz;
+                        if distance_sq > max_distance_sq {
+                            continue;
+                        }
+                        let is_better = match best {
+                            None => true,
+                            Some((best_distance_sq, best_index)) => {
+                                let best_sample = &samples[best_index];
+                                // Explicit tie-break so file order never decides.
+                                (distance_sq, sample.x, sample.z, sample.depth_m.to_bits())
+                                    < (
+                                        best_distance_sq,
+                                        best_sample.x,
+                                        best_sample.z,
+                                        best_sample.depth_m.to_bits(),
+                                    )
+                            }
+                        };
+                        if is_better {
+                            best = Some((distance_sq, index));
+                        }
+                    }
+                }
+            }
+
+            if let Some((_, index)) = best {
+                depth_m[gz * grid_width + gx] = samples[index].depth_m;
+            }
+        }
+    }
+
+    depth_m
 }
 
 /// Build a bathymetry grid from local J-EGG500 files.
 ///
 /// The lattice is built in **pre-rotation** world coordinates. When
 /// `rotation_degrees` is non-zero, the returned grid carries the matching
-/// rotation, so callers can still sample it with final world X/Z. This keeps
-/// the 500 m source lattice intact instead of binning rotated samples into an
-/// axis-aligned grid, which would leave holes at some angles.
+/// rotation, so callers can still sample it with final world X/Z. Each grid
+/// cell takes the nearest projected sample rather than the average of the
+/// samples that happen to fall inside it; this keeps the source depths intact
+/// and fills the half-cell holes the rotated lattice would otherwise leave.
 ///
 /// Returns `Ok(None)` when no data directory was supplied, the directory does
 /// not exist, or no overlapping files contain valid samples. This lets the
@@ -314,7 +398,7 @@ pub fn load_jegg500_for_bbox(
     let (grid_origin_x, grid_origin_z, grid_width, grid_height) =
         xzbbox_to_grid_bounds(&source_xzbbox, cell_size_blocks)?;
 
-    let mut sums: HashMap<(usize, usize), (f64, u32)> = HashMap::new();
+    let mut projected_samples: Vec<ProjectedSample> = Vec::new();
     let mut any_file = false;
     let mut any_sample = false;
     let mut files_read = 0usize;
@@ -344,16 +428,9 @@ pub fn load_jegg500_for_bbox(
         files_read += 1;
         for sample in tile_samples {
             any_sample = true;
-            accumulate_sample(
-                &sample,
-                &transformer,
-                grid_origin_x,
-                grid_origin_z,
-                cell_size_blocks,
-                grid_width,
-                grid_height,
-                &mut sums,
-            );
+            if let Some(projected) = project_sample(&sample, &transformer) {
+                projected_samples.push(projected);
+            }
         }
     }
 
@@ -370,19 +447,15 @@ pub fn load_jegg500_for_bbox(
         return Ok(None);
     }
 
-    let total = grid_width
-        .checked_mul(grid_height)
-        .ok_or("J-EGG500 grid dimension overflow")?;
-    let mut depth_m = vec![f32::NAN; total];
-    let mut populated_cells = 0usize;
-    for (gz, gx) in (0..grid_height).flat_map(|z| (0..grid_width).map(move |x| (z, x))) {
-        if let Some((sum, count)) = sums.get(&(gx, gz)) {
-            if *count > 0 {
-                depth_m[gz * grid_width + gx] = (sum / f64::from(*count)) as f32;
-                populated_cells += 1;
-            }
-        }
-    }
+    let depth_m = rasterize_samples(
+        &projected_samples,
+        grid_origin_x,
+        grid_origin_z,
+        grid_width,
+        grid_height,
+        cell_size_blocks,
+    );
+    let populated_cells = depth_m.iter().filter(|depth| depth.is_finite()).count();
 
     let rotation_center_x = (source_xzbbox.min_x() + source_xzbbox.max_x()) as f64 / 2.0;
     let rotation_center_z = (source_xzbbox.min_z() + source_xzbbox.max_z()) as f64 / 2.0;
@@ -438,31 +511,18 @@ pub fn build_bathymetry_grid_from_samples(
     let (grid_origin_x, grid_origin_z, grid_width, grid_height) =
         xzbbox_to_grid_bounds(xzbbox, cell_size_blocks)?;
 
-    let mut sums: HashMap<(usize, usize), (f64, u32)> = HashMap::new();
-    for sample in samples {
-        accumulate_sample(
-            sample,
-            transformer,
-            grid_origin_x,
-            grid_origin_z,
-            cell_size_blocks,
-            grid_width,
-            grid_height,
-            &mut sums,
-        );
-    }
-
-    let total = grid_width
-        .checked_mul(grid_height)
-        .ok_or("J-EGG500 grid dimension overflow")?;
-    let mut depth_m = vec![f32::NAN; total];
-    for (gz, gx) in (0..grid_height).flat_map(|z| (0..grid_width).map(move |x| (z, x))) {
-        if let Some((sum, count)) = sums.get(&(gx, gz)) {
-            if *count > 0 {
-                depth_m[gz * grid_width + gx] = (sum / f64::from(*count)) as f32;
-            }
-        }
-    }
+    let projected_samples: Vec<ProjectedSample> = samples
+        .iter()
+        .filter_map(|sample| project_sample(sample, transformer))
+        .collect();
+    let depth_m = rasterize_samples(
+        &projected_samples,
+        grid_origin_x,
+        grid_origin_z,
+        grid_width,
+        grid_height,
+        cell_size_blocks,
+    );
 
     BathymetryGrid::new(
         depth_m,
@@ -556,6 +616,77 @@ mod tests {
         assert_eq!(
             BathymetryInterpolation::from(config.interpolation),
             BathymetryInterpolation::Bilinear
+        );
+    }
+
+    #[test]
+    fn rasterize_fills_half_cell_hole_between_offset_samples() {
+        // Four samples sit in the diagonal bins around cell (2,2), the same
+        // pattern produced when the rotated J-EGG500 lattice is offset by half
+        // a cell. The old per-bin accumulation left the centre cell empty.
+        let samples = [
+            ProjectedSample {
+                x: 19,
+                z: 19,
+                depth_m: 13.0,
+            },
+            ProjectedSample {
+                x: 19,
+                z: 31,
+                depth_m: 13.0,
+            },
+            ProjectedSample {
+                x: 31,
+                z: 19,
+                depth_m: 13.0,
+            },
+            ProjectedSample {
+                x: 31,
+                z: 31,
+                depth_m: 13.0,
+            },
+        ];
+        let depth = rasterize_samples(&samples, 0, 0, 4, 4, 10);
+        assert_eq!(
+            depth[2 * 4 + 2],
+            13.0,
+            "the cell surrounded by offset samples must be filled"
+        );
+    }
+
+    #[test]
+    fn rasterize_uses_nearest_sample_not_bin_average() {
+        // Both samples land in the same 10-block bin. The cell centre is closer
+        // to the 30 m sample, so the cell must be 30 m rather than their 20 m
+        // average.
+        let samples = [
+            ProjectedSample {
+                x: 1,
+                z: 5,
+                depth_m: 10.0,
+            },
+            ProjectedSample {
+                x: 8,
+                z: 5,
+                depth_m: 30.0,
+            },
+        ];
+        let depth = rasterize_samples(&samples, 0, 0, 1, 1, 10);
+        assert_eq!(depth[0], 30.0);
+    }
+
+    #[test]
+    fn rasterize_leaves_far_nodata_empty() {
+        let samples = [ProjectedSample {
+            x: 5,
+            z: 5,
+            depth_m: 10.0,
+        }];
+        let depth = rasterize_samples(&samples, 0, 0, 10, 10, 10);
+        assert_eq!(depth[0], 10.0);
+        assert!(
+            depth[9 * 10 + 9].is_nan(),
+            "cells beyond the fill radius must stay NoData"
         );
     }
 

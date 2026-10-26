@@ -165,6 +165,12 @@ pub struct Args {
     #[arg(long = "no-legacy-water-depth", default_value_t = true, action = ArgAction::SetFalse)]
     pub legacy_water_depth: bool,
 
+    /// Add noise-driven dunes, seagrass, and seabed material patches on top of
+    /// the carved depth field. Enabled by default; `--no-underwater-detail`
+    /// leaves the seabed at the raw depth values.
+    #[arg(long = "no-underwater-detail", default_value_t = true, action = ArgAction::SetFalse)]
+    pub underwater_detail: bool,
+
     /// Print generation-only timing to stderr (excludes data fetching)
     #[arg(long, hide = true)]
     pub benchmark: bool,
@@ -824,6 +830,27 @@ mod tests {
         ];
         let args = Args::parse_from(cmd.iter());
         assert!(!args.jegg500_interpolation);
+    }
+
+    #[test]
+    fn underwater_detail_can_be_disabled() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp_path = tmpdir.path().to_str().unwrap();
+
+        let cmd = ["arnis", "--output-dir", tmp_path, "--bbox", "1,2,3,4"];
+        let args = Args::parse_from(cmd.iter());
+        assert!(args.underwater_detail, "decoration is on by default");
+
+        let cmd = [
+            "arnis",
+            "--output-dir",
+            tmp_path,
+            "--bbox",
+            "1,2,3,4",
+            "--no-underwater-detail",
+        ];
+        let args = Args::parse_from(cmd.iter());
+        assert!(!args.underwater_detail);
     }
 
     #[test]

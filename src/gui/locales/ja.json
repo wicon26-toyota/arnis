@@ -63,6 +63,7 @@
   "jegg500_interpolation": "海底地形の補間（バイリニア）",
   "jegg500_data_note": "J-EGG500 のデータは日本海洋データセンター（JODC）提供です。成果物には出典を明記し、JODC へ写しを提出してください。",
   "legacy_water_depth": "従来の水深生成",
+  "underwater_detail": "海底の装飾",
   "bake_lighting": "ライティングをベイク",
   "voxy_lod": "Voxy LODを事前生成",
   "bedrock_auto_generated": "Bedrock ワールドは自動生成されます",

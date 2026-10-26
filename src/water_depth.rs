@@ -88,6 +88,9 @@ pub struct BigWaterField {
     height: usize,
     min_x: i32,
     min_z: i32,
+    /// Whether to add noise-driven dunes, vegetation, and seabed material
+    /// patches on top of the depth field. Disabled for data-only bathymetry.
+    underwater_detail: bool,
 }
 
 impl BigWaterField {
@@ -99,7 +102,15 @@ impl BigWaterField {
             height: 0,
             min_x: 0,
             min_z: 0,
+            underwater_detail: true,
         }
+    }
+
+    /// Sets whether decorative dunes, vegetation, and material noise are
+    /// added after carving. Disabling keeps the seabed at the raw depth field.
+    pub fn with_underwater_detail(mut self, enabled: bool) -> Self {
+        self.underwater_detail = enabled;
+        self
     }
 
     #[inline]
@@ -565,6 +576,7 @@ pub fn compute_big_water_field(ground: &Ground, xzbbox: &XZBBox) -> BigWaterFiel
         height: sh,
         min_x: smin_x,
         min_z: smin_z,
+        underwater_detail: true,
     }
 }
 
@@ -582,6 +594,7 @@ pub fn compute_big_water_field_without_legacy(ground: &Ground, xzbbox: &XZBBox) 
         height,
         min_x,
         min_z,
+        underwater_detail: true,
     }
 }
 
@@ -801,60 +814,73 @@ pub fn carve_water_column(
     let bed_y = water_y - depth - 1;
 
     // Keep the bed plain near causeways so blobs/dunes/veg don't clutter piers.
-    let near_bridge = depth >= 2 && !road_mask.is_empty() && bridge_adjacent(road_mask, x, z);
+    // Data-only mode skips the bridge probe as well as the decoration.
+    let near_bridge = bwf.underwater_detail
+        && depth >= 2
+        && !road_mask.is_empty()
+        && bridge_adjacent(road_mask, x, z);
 
-    // Layered bed: gravel base with noise-driven sand/clay/dirt patches over stone.
-    let (top_block, under_block) = match depth {
-        0..=1 => (SAND, SANDSTONE),
-        2..=6 if near_bridge => {
-            if crate::ground_generation::value_noise_01(x, z, 6) < 0.4 && depth <= 3 {
-                (SAND, STONE)
-            } else {
-                (GRAVEL, STONE)
-            }
+    // Layered bed: gravel base with noise-driven sand/clay/dirt patches over
+    // stone. Data-only mode uses a plain depth-keyed material instead.
+    let (top_block, under_block) = if !bwf.underwater_detail {
+        if depth <= 1 {
+            (SAND, SANDSTONE)
+        } else {
+            (GRAVEL, STONE)
         }
-        2..=6 => {
-            // Coherent jitter breaks concentric depth rings as patches, not speckle.
-            let jn = crate::ground_generation::value_noise_01(x + 7, z + 13, 22);
-            let jitter = if jn < 0.34 {
-                -1
-            } else if jn > 0.66 {
-                1
-            } else {
-                0
-            };
-            let d = (depth + jitter).max(1);
-            // Domain-warp the sample coords so patches read organic, not circular.
-            let warp_x = crate::ground_generation::value_noise_01(x + 901, z + 33, 52);
-            let warp_z = crate::ground_generation::value_noise_01(x + 17, z + 811, 52);
-            let wx = x + ((warp_x - 0.5) * 28.0) as i32;
-            let wz = z + ((warp_z - 0.5) * 28.0) as i32;
-            // Per-block noise, sampled lazily so most cells skip the rare tiers.
-            let vn = |dx, dz, s| crate::ground_generation::value_noise_01(wx + dx, wz + dz, s);
-            let top = if d <= 1 {
-                SAND
-            } else if d == 2 {
-                if vn(53, 97, 56) > 0.50 {
+    } else {
+        match depth {
+            0..=1 => (SAND, SANDSTONE),
+            2..=6 if near_bridge => {
+                if crate::ground_generation::value_noise_01(x, z, 6) < 0.4 && depth <= 3 {
+                    (SAND, STONE)
+                } else {
+                    (GRAVEL, STONE)
+                }
+            }
+            2..=6 => {
+                // Coherent jitter breaks concentric depth rings as patches, not speckle.
+                let jn = crate::ground_generation::value_noise_01(x + 7, z + 13, 22);
+                let jitter = if jn < 0.34 {
+                    -1
+                } else if jn > 0.66 {
+                    1
+                } else {
+                    0
+                };
+                let d = (depth + jitter).max(1);
+                // Domain-warp the sample coords so patches read organic, not circular.
+                let warp_x = crate::ground_generation::value_noise_01(x + 901, z + 33, 52);
+                let warp_z = crate::ground_generation::value_noise_01(x + 17, z + 811, 52);
+                let wx = x + ((warp_x - 0.5) * 28.0) as i32;
+                let wz = z + ((warp_z - 0.5) * 28.0) as i32;
+                // Per-block noise, sampled lazily so most cells skip the rare tiers.
+                let vn = |dx, dz, s| crate::ground_generation::value_noise_01(wx + dx, wz + dz, s);
+                let top = if d <= 1 {
                     SAND
+                } else if d == 2 {
+                    if vn(53, 97, 56) > 0.50 {
+                        SAND
+                    } else {
+                        GRAVEL
+                    }
+                } else if d >= 5 && vn(727, 911, 8) > 0.96 {
+                    SOUL_SAND
+                } else if vn(73, 109, 64) > 0.74 {
+                    CLAY
+                } else if vn(53, 97, 56) > 0.81 {
+                    SAND
+                } else if vn(211, 41, 44) > 0.88 {
+                    DIRT
+                } else if vn(311, 17, 50) > 0.90 {
+                    COARSE_DIRT
                 } else {
                     GRAVEL
-                }
-            } else if d >= 5 && vn(727, 911, 8) > 0.96 {
-                SOUL_SAND
-            } else if vn(73, 109, 64) > 0.74 {
-                CLAY
-            } else if vn(53, 97, 56) > 0.81 {
-                SAND
-            } else if vn(211, 41, 44) > 0.88 {
-                DIRT
-            } else if vn(311, 17, 50) > 0.90 {
-                COARSE_DIRT
-            } else {
-                GRAVEL
-            };
-            (top, STONE)
+                };
+                (top, STONE)
+            }
+            _ => (GRAVEL, STONE),
         }
-        _ => (GRAVEL, STONE),
     };
 
     if bed_y > min_y() {
@@ -873,13 +899,13 @@ pub fn carve_water_column(
 
     // Dunes return their crest so veg plants on top instead of inside them.
     // 7x7 body max is sampled lazily; depth 1 always yields amp 0, skip it too.
-    let bump = if depth >= 2 && !near_bridge {
+    let bump = if bwf.underwater_detail && depth >= 2 && !near_bridge {
         let amp = dune_amp(bwf.body_max_7x7(x, z), depth);
         place_underwater_dunes(editor, x, z, water_y, bed_y, amp, top_block)
     } else {
         0
     };
-    if depth >= 3 && !near_bridge {
+    if bwf.underwater_detail && depth >= 3 && !near_bridge {
         place_underwater_vegetation(editor, x, z, water_y, bed_y + bump, depth);
     }
 }
@@ -1363,6 +1389,7 @@ mod tests {
             height: 4,
             min_x: 0,
             min_z: 0,
+            underwater_detail: true,
         };
         assert_eq!(
             bwf.body_max_7x7(0, 0),
@@ -1372,6 +1399,75 @@ mod tests {
         assert_eq!(bwf.body_max_7x7(-3, -3), 0, "mostly-outside window");
         assert_eq!(bwf.body_max_7x7(10, 10), 0, "fully outside");
         assert_eq!(BigWaterField::empty().body_max_7x7(5, 5), 0);
+    }
+
+    fn detail_test_field(enabled: bool) -> BigWaterField {
+        let mut field = BigWaterField::empty().with_underwater_detail(enabled);
+        field.width = 16;
+        field.height = 16;
+        field.depth = vec![0u8; (16usize * 16).div_ceil(2)];
+        for idx in 0..16 * 16 {
+            nibble_set(&mut field.depth, idx, 4);
+        }
+        field
+    }
+
+    #[test]
+    fn underwater_detail_off_keeps_bed_flat() {
+        use crate::element_processing::building_test_support::test_editor;
+
+        let bbox = XZBBox::rect_from_min_max(0, 0, 15, 15).unwrap();
+        let mut editor = test_editor(&bbox);
+        let road_mask = RoadMaskBitmap::new(&bbox);
+        let field = detail_test_field(false);
+        let water_y = 10;
+
+        for z in 0..16 {
+            for x in 0..16 {
+                carve_water_column(&mut editor, x, z, water_y, 4, &road_mask, &field);
+            }
+        }
+
+        for z in 0..16 {
+            for x in 0..16 {
+                assert_eq!(
+                    editor.get_block_absolute(x, water_y - 5, z),
+                    Some(GRAVEL),
+                    "data-only bed top at ({x},{z})"
+                );
+                assert_eq!(
+                    editor.get_block_absolute(x, water_y - 4, z),
+                    Some(WATER),
+                    "water column at ({x},{z})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn underwater_detail_on_can_raise_bed() {
+        use crate::element_processing::building_test_support::test_editor;
+
+        let bbox = XZBBox::rect_from_min_max(0, 0, 15, 15).unwrap();
+        let mut editor = test_editor(&bbox);
+        let road_mask = RoadMaskBitmap::new(&bbox);
+        let field = detail_test_field(true);
+        let water_y = 10;
+
+        for z in 0..16 {
+            for x in 0..16 {
+                carve_water_column(&mut editor, x, z, water_y, 4, &road_mask, &field);
+            }
+        }
+
+        let raised = (0..16)
+            .flat_map(|z| (0..16).map(move |x| (x, z)))
+            .filter(|&(x, z)| editor.get_block_absolute(x, water_y - 4, z) != Some(WATER))
+            .count();
+        assert!(
+            raised > 0,
+            "enabled decoration must be able to place a dune above the raw bed"
+        );
     }
 
     #[test]

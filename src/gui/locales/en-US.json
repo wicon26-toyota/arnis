@@ -70,6 +70,7 @@
   "jegg500_interpolation": "Smooth Bathymetry Interpolation",
   "jegg500_data_note": "J-EGG500 data is provided by the Japan Oceanographic Data Center (JODC). Credit JODC in published results and submit one copy to JODC.",
   "legacy_water_depth": "Legacy Water Depth",
+  "underwater_detail": "Underwater Detail",
   "bake_lighting": "Bake lighting",
   "voxy_lod": "Pre-generate Voxy LOD",
   "bedrock_auto_generated": "Bedrock world is auto-generated",

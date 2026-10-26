@@ -721,6 +721,7 @@ pub fn generate_world_with_options(
     } else {
         fallback_water_field()
     };
+    let big_water_field = big_water_field.with_underwater_detail(args.underwater_detail);
     // Resolved once here: a body spanning many tiles must not be measured per tile.
     let still_surfaces = water_areas::prescan_still_surfaces(&elements, &ground, &xzbbox);
 

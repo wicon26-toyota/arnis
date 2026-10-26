@@ -142,6 +142,7 @@ async function applyLocalization(localization) {
     "span[data-localize='jegg500_interpolation']": "jegg500_interpolation",
     "div[data-localize='jegg500_data_note']": "jegg500_data_note",
     "span[data-localize='legacy_water_depth']": "legacy_water_depth",
+    "span[data-localize='underwater_detail']": "underwater_detail",
     "span[data-localize='anonymous_crash_reports']": "anonymous_crash_reports",
     "span[data-localize='map_theme']": "map_theme",
     "span[data-localize='custom_map_source']": "custom_map_source",
@@ -425,6 +426,7 @@ const EARTH_ONLY_SETTINGS = [
   'jegg500-dir-browse',
   'jegg500-interpolation-toggle',
   'legacy-water-depth-toggle',
+  'underwater-detail-toggle',
   // Off Earth the body's own imagery is the only basemap, so neither the
   // Earth theme picker nor a custom Earth tile source has anything to act on.
   'tile-theme-select',
@@ -2194,6 +2196,8 @@ async function startGeneration() {
     var jegg500_interpolation = !jegg500InterpolationToggle.disabled && jegg500InterpolationToggle.checked;
     var legacyWaterDepthToggle = document.getElementById("legacy-water-depth-toggle");
     var legacy_water_depth = !legacyWaterDepthToggle.disabled && legacyWaterDepthToggle.checked;
+    var underwaterDetailToggle = document.getElementById("underwater-detail-toggle");
+    var underwater_detail = !underwaterDetailToggle.disabled && underwaterDetailToggle.checked;
     // Read the input rather than the cached value: the change handler validates
     // the path asynchronously, so clicking Start right after typing could
     // otherwise send the previous directory.
@@ -2256,6 +2260,7 @@ async function startGeneration() {
         jegg500Enabled: jegg500_enabled,
         jegg500Interpolation: jegg500_interpolation,
         legacyWaterDepthEnabled: legacy_water_depth,
+        underwaterDetailEnabled: underwater_detail,
         jegg500Dir: jegg500_dir
     });
 
