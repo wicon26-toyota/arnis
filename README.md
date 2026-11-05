@@ -48,10 +48,25 @@ Tauri / WebKitGTK ベースの GUI をビルドするため、以下のような
 Debian / Ubuntu 系では、例えば次のようにインストールできます。
 
 ```bash
-sudo apt install \
-  pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
-  libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libglib2.0-dev \
-  libcairo2-dev libpango1.0-dev libgdk-pixbuf-2.0-dev libwayland-dev
+sudo apt install -y \
+  libssl-dev \
+  libgtk-3-dev \
+  libwebkit2gtk-4.1-dev \
+  libjavascriptcoregtk-4.1-dev \
+  libsoup-3.0-dev \
+  libglib2.0-dev \
+  libcairo2-dev \
+  libpango1.0-dev \
+  libgdk-pixbuf-2.0-dev \
+  libwayland-dev
+
+// Rust公式のrustupを使用
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+. "$HOME/.cargo/env"
+
+rustup default stable
+rustup update stable
 ```
 
 Nix を使う場合は `flake.nix` にこれらの依存関係が定義されています。
@@ -73,8 +88,8 @@ git clone https://github.com/wicon26-toyota/arnis.git
 cd arnis
 git switch feature/jegg500-bathymetry
 
-# 依存関係を取得
-cargo fetch
+# Cargoの依存関係を取得
+cargo fetch --locked
 ```
 
 ## ビルドと実行
@@ -82,7 +97,7 @@ cargo fetch
 ### GUI 版
 
 ```bash
-cargo run --release
+cargo run --release --locked
 ```
 
 Tauri ベースのデスクトップ GUI が起動します。マップ上で範囲を選択し、出力先のワールドフォルダを指定して **Start Generation** を押してください。
