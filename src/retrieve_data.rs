@@ -5,7 +5,6 @@ use crate::progress::{emit_gui_error, emit_gui_progress_update, is_running_with_
 use crate::telemetry::{send_log, LogLevel};
 use colored::Colorize;
 use rand::prelude::SliceRandom;
-use rand::Rng;
 use reqwest::blocking::Client;
 use reqwest::blocking::ClientBuilder;
 use serde::Deserialize;
@@ -50,7 +49,7 @@ fn download_with_reqwest(
         .build()?;
 
     let response: Result<reqwest::blocking::Response, reqwest::Error> =
-        client.get(url).query(&[("data", query)]).send();
+        client.post(url).form(&[("data", query)]).send();
 
     match response {
         Ok(resp) => {
@@ -290,9 +289,8 @@ pub fn fetch_data_from_overpass(
     {
         // Fetch data from Overpass API.
         // Strategy:
-        // 1) 50% chance: probe one random official server first.
-        // 2) If the probe does not succeed, run the normal path: arnis API once,
-        //    then shuffled official, then shuffled fallback servers.
+        // 1) Try the Arnis API first.
+        // 2) Fall back to shuffled official and alternative servers.
         #[derive(Clone, Copy, PartialEq, Eq)]
         enum ServerKind {
             Primary,
@@ -301,22 +299,10 @@ pub fn fetch_data_from_overpass(
 
         let mut rng = rand::rng();
         let mut request_plan: Vec<(&str, ServerKind)> = Vec::new();
-        let mut probed_server: Option<&str> = None;
-
-        if rng.random_bool(0.5) {
-            let probe_idx = rng.random_range(0..api_servers.len());
-            let probe_server = api_servers[probe_idx];
-            request_plan.push((probe_server, ServerKind::Primary));
-            probed_server = Some(probe_server);
-        }
-
         request_plan.push((arnis_api_server, ServerKind::Primary));
 
         let mut shuffled_primary_servers = api_servers.clone();
         shuffled_primary_servers.shuffle(&mut rng);
-        if let Some(probed_server) = probed_server {
-            shuffled_primary_servers.retain(|&url| url != probed_server);
-        }
         request_plan.extend(
             shuffled_primary_servers
                 .into_iter()
