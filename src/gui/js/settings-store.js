@@ -48,6 +48,7 @@ const SETTINGS = [
   // Water
   { id: 'jegg500-enabled-toggle', kind: 'checkbox', store: OWN },
   { id: 'jegg500-interpolation-toggle', kind: 'checkbox', store: OWN },
+  { id: 'linear-water-depth-toggle', kind: 'checkbox', store: OWN },
   { id: 'legacy-water-depth-toggle', kind: 'checkbox', store: OWN },
   { id: 'underwater-detail-toggle', kind: 'checkbox', store: OWN },
 

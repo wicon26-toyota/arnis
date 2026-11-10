@@ -20,6 +20,7 @@ use crate::progress::{
 #[cfg(feature = "gui")]
 use crate::telemetry::{send_log, LogLevel};
 use crate::tile;
+use crate::water_depth::DepthCompression;
 use crate::world_editor::{FlushWorker, WorldEditor, WorldFormat};
 use colored::Colorize;
 use fnv::FnvHashMap;
@@ -664,7 +665,14 @@ pub fn generate_world_with_options(
         } else {
             JeggInterpolation::NearestCell
         };
-        let config = Jegg500Config::new(dir).with_interpolation(interpolation);
+        let compression = if args.linear_water_depth {
+            DepthCompression::linear()
+        } else {
+            DepthCompression::default()
+        };
+        let config = Jegg500Config::new(dir)
+            .with_interpolation(interpolation)
+            .with_compression(compression);
         match jegg500::load_jegg500_for_bbox(&config, &llbbox, args.scale, args.rotation) {
             Ok(Some(bathymetry)) => {
                 if args.legacy_water_depth {

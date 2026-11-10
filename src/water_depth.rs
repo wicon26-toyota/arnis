@@ -466,6 +466,53 @@ impl NonlinearDepthCompression {
     }
 }
 
+/// Real-depth-to-block mapping used for J-EGG500 bathymetry.
+///
+/// The default is [`NonlinearDepthCompression`], which keeps shallow waters
+/// readable while compressing deep ocean. [`DepthCompression::linear`] instead
+/// maps 1 metre of depth to 1 block, capped at the `u8` storage limit; the
+/// world floor can cap it further when the column is carved.
+#[derive(Clone, Copy, Debug)]
+pub enum DepthCompression {
+    Nonlinear(NonlinearDepthCompression),
+    Linear { max_blocks: u8 },
+}
+
+impl Default for DepthCompression {
+    fn default() -> Self {
+        Self::Nonlinear(NonlinearDepthCompression::default())
+    }
+}
+
+impl From<NonlinearDepthCompression> for DepthCompression {
+    fn from(compression: NonlinearDepthCompression) -> Self {
+        Self::Nonlinear(compression)
+    }
+}
+
+impl DepthCompression {
+    /// One metre of real depth becomes one block, up to the `u8` storage limit.
+    pub const fn linear() -> Self {
+        Self::Linear {
+            max_blocks: u8::MAX,
+        }
+    }
+
+    /// Maps positive water depth in metres to a Minecraft block count.
+    #[inline]
+    pub fn compress_meters(self, depth_m: f32) -> u8 {
+        match self {
+            Self::Nonlinear(compression) => compression.compress_meters(depth_m),
+            Self::Linear { max_blocks } => {
+                if !depth_m.is_finite() || depth_m <= 0.0 || max_blocks == 0 {
+                    return 0;
+                }
+                depth_m.round().clamp(1.0, f32::from(max_blocks)) as u8
+            }
+        }
+    }
+}
+
 /// Padded block rectangle covering every LC_WATER cell. `None` when there is no
 /// water or the area exceeds the carving cap (flat water is used then).
 fn water_field_bounds(ground: &Ground, xzbbox: &XZBBox) -> Option<(i32, i32, usize, usize)> {
@@ -615,10 +662,10 @@ pub fn compute_big_water_field_with_bathymetry(
     ground: &Ground,
     xzbbox: &XZBBox,
     bathymetry: &BathymetryGrid,
-    compression: NonlinearDepthCompression,
+    compression: impl Into<DepthCompression>,
 ) -> BigWaterField {
     let mut field = compute_big_water_field(ground, xzbbox);
-    apply_bathymetry_overrides(&mut field, ground, xzbbox, bathymetry, compression);
+    apply_bathymetry_overrides(&mut field, ground, xzbbox, bathymetry, compression.into());
     field
 }
 
@@ -629,10 +676,10 @@ pub fn compute_big_water_field_with_bathymetry_only(
     ground: &Ground,
     xzbbox: &XZBBox,
     bathymetry: &BathymetryGrid,
-    compression: NonlinearDepthCompression,
+    compression: impl Into<DepthCompression>,
 ) -> BigWaterField {
     let mut field = compute_big_water_field_without_legacy(ground, xzbbox);
-    apply_bathymetry_overrides(&mut field, ground, xzbbox, bathymetry, compression);
+    apply_bathymetry_overrides(&mut field, ground, xzbbox, bathymetry, compression.into());
     field
 }
 
@@ -641,7 +688,7 @@ fn apply_bathymetry_overrides(
     ground: &Ground,
     xzbbox: &XZBBox,
     bathymetry: &BathymetryGrid,
-    compression: NonlinearDepthCompression,
+    compression: DepthCompression,
 ) {
     let total = match field.width.checked_mul(field.height) {
         Some(total) if total > 0 => total,
@@ -1270,6 +1317,32 @@ mod tests {
     }
 
     #[test]
+    fn default_depth_compression_stays_nonlinear() {
+        let linear = DepthCompression::linear().compress_meters(100.0);
+        let default = DepthCompression::default().compress_meters(100.0);
+        assert_ne!(default, linear);
+        assert_eq!(
+            default,
+            NonlinearDepthCompression::default().compress_meters(100.0)
+        );
+    }
+
+    #[test]
+    fn linear_bathymetry_compression_is_one_block_per_metre() {
+        let compression = DepthCompression::linear();
+        assert_eq!(compression.compress_meters(0.0), 0);
+        assert_eq!(compression.compress_meters(1.0), 1);
+        assert_eq!(compression.compress_meters(1.6), 2);
+        assert_eq!(compression.compress_meters(10.0), 10);
+        assert_eq!(compression.compress_meters(100.0), 100);
+        assert_eq!(compression.compress_meters(255.0), 255);
+        assert_eq!(compression.compress_meters(1_000.0), u8::MAX);
+        assert_eq!(compression.compress_meters(-1.0), 0);
+        assert_eq!(compression.compress_meters(f32::NAN), 0);
+        assert_eq!(compression.compress_meters(f32::INFINITY), 0);
+    }
+
+    #[test]
     fn bathymetry_grid_handles_bounds_and_nodata() {
         let grid = BathymetryGrid::new(vec![10.0, 20.0, f32::NAN, 0.0], 2, 2, 100, -20, 1)
             .unwrap()
@@ -1683,6 +1756,24 @@ mod water_field_traversal_tests {
             0,
             "no-data cells must stay flat instead of using the legacy estimate"
         );
+    }
+
+    #[test]
+    fn linear_bathymetry_keeps_metres_as_blocks() {
+        let side = 48usize;
+        let bbox = XZBBox::rect_from_min_max(0, 0, side as i32 - 1, side as i32 - 1).unwrap();
+        let ground = all_water_ground(side);
+        let bathymetry =
+            BathymetryGrid::new(vec![50.0f32], 1, 1, bbox.min_x(), bbox.min_z(), side).unwrap();
+        let field = compute_big_water_field_with_bathymetry_only(
+            &ground,
+            &bbox,
+            &bathymetry,
+            DepthCompression::linear(),
+        );
+
+        assert_eq!(field.depth_at(side as i32 / 2, side as i32 / 2), 50);
+        assert!(field.depth_at(5, 5) > 0);
     }
 
     #[test]

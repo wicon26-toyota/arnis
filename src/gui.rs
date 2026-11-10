@@ -1162,6 +1162,7 @@ fn gui_start_generation(
     celestial_body_name: String,
     jegg500_enabled: bool,
     jegg500_interpolation: bool,
+    linear_water_depth_enabled: bool,
     legacy_water_depth_enabled: bool,
     underwater_detail_enabled: bool,
     jegg500_dir: String,
@@ -1490,6 +1491,7 @@ fn gui_start_generation(
                 aws_only_elevation,
                 jegg500_enabled,
                 jegg500_interpolation,
+                linear_water_depth: linear_water_depth_enabled,
                 legacy_water_depth: legacy_water_depth_enabled,
                 underwater_detail: underwater_detail_enabled,
                 jegg500_dir: {

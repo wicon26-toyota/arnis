@@ -159,6 +159,12 @@ pub struct Args {
     #[arg(long = "no-jegg500-interpolation", default_value_t = true, action = ArgAction::SetFalse)]
     pub jegg500_interpolation: bool,
 
+    /// Map J-EGG500 real depth linearly at 1 block per metre instead of the
+    /// default nonlinear compression. Deep water is capped at 255 blocks; the
+    /// world floor may cap it further.
+    #[arg(long, default_value_t = false)]
+    pub linear_water_depth: bool,
+
     /// Generate synthetic shoreline-distance water depth where J-EGG500 data is
     /// unavailable. Enabled by default; `--no-legacy-water-depth` leaves those
     /// cells flat instead.
@@ -381,6 +387,7 @@ pub fn apply_body_defaults(args: &mut Args) {
     args.legacy_trees = false;
     args.aws_only_elevation = false;
     args.jegg500_enabled = false;
+    args.linear_water_depth = false;
     args.legacy_water_depth = false;
     // Relief already fits vanilla height, so the pack would add only empty sky.
     args.disable_height_limit = false;
@@ -830,6 +837,27 @@ mod tests {
         ];
         let args = Args::parse_from(cmd.iter());
         assert!(!args.jegg500_interpolation);
+    }
+
+    #[test]
+    fn linear_water_depth_is_opt_in() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp_path = tmpdir.path().to_str().unwrap();
+
+        let cmd = ["arnis", "--output-dir", tmp_path, "--bbox", "1,2,3,4"];
+        let args = Args::parse_from(cmd.iter());
+        assert!(!args.linear_water_depth, "compression is the default");
+
+        let cmd = [
+            "arnis",
+            "--output-dir",
+            tmp_path,
+            "--bbox",
+            "1,2,3,4",
+            "--linear-water-depth",
+        ];
+        let args = Args::parse_from(cmd.iter());
+        assert!(args.linear_water_depth);
     }
 
     #[test]

@@ -425,6 +425,7 @@ const EARTH_ONLY_SETTINGS = [
   'jegg500-dir-input',
   'jegg500-dir-browse',
   'jegg500-interpolation-toggle',
+  'linear-water-depth-toggle',
   'legacy-water-depth-toggle',
   'underwater-detail-toggle',
   // Off Earth the body's own imagery is the only basemap, so neither the
@@ -1711,6 +1712,7 @@ function refreshJegg500Controls() {
   const input = document.getElementById('jegg500-dir-input');
   const browseBtn = document.getElementById('jegg500-dir-browse');
   const interpolationToggle = document.getElementById('jegg500-interpolation-toggle');
+  const linearDepthToggle = document.getElementById('linear-water-depth-toggle');
   if (!toggle || !input) return;
 
   const onEarth = selectedCelestialBody === 'earth';
@@ -1718,10 +1720,11 @@ function refreshJegg500Controls() {
   input.disabled = !enabled;
   if (browseBtn) browseBtn.disabled = !enabled;
   if (interpolationToggle) interpolationToggle.disabled = !enabled;
+  if (linearDepthToggle) linearDepthToggle.disabled = !enabled;
 
   // Keep the J-EGG500 rows visibly inactive when the source is switched off.
   // Off Earth the rows are already marked by setCelestialBody().
-  [input, interpolationToggle].forEach((control) => {
+  [input, interpolationToggle, linearDepthToggle].forEach((control) => {
     const row = control && control.closest('.settings-row');
     if (row) row.classList.toggle('settings-row-unavailable', !enabled && onEarth);
   });
@@ -2194,6 +2197,8 @@ async function startGeneration() {
     var jegg500_enabled = !jegg500Toggle.disabled && jegg500Toggle.checked;
     var jegg500InterpolationToggle = document.getElementById("jegg500-interpolation-toggle");
     var jegg500_interpolation = !jegg500InterpolationToggle.disabled && jegg500InterpolationToggle.checked;
+    var linearWaterDepthToggle = document.getElementById("linear-water-depth-toggle");
+    var linear_water_depth = !linearWaterDepthToggle.disabled && linearWaterDepthToggle.checked;
     var legacyWaterDepthToggle = document.getElementById("legacy-water-depth-toggle");
     var legacy_water_depth = !legacyWaterDepthToggle.disabled && legacyWaterDepthToggle.checked;
     var underwaterDetailToggle = document.getElementById("underwater-detail-toggle");
@@ -2259,6 +2264,7 @@ async function startGeneration() {
         celestialBodyName: selectedCelestialBody,
         jegg500Enabled: jegg500_enabled,
         jegg500Interpolation: jegg500_interpolation,
+        linearWaterDepthEnabled: linear_water_depth,
         legacyWaterDepthEnabled: legacy_water_depth,
         underwaterDetailEnabled: underwater_detail,
         jegg500Dir: jegg500_dir

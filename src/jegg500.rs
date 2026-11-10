@@ -18,7 +18,7 @@
 use crate::coordinate_system::cartesian::{XZBBox, XZPoint};
 use crate::coordinate_system::geographic::{LLBBox, LLPoint};
 use crate::coordinate_system::transformation::CoordTransformer;
-use crate::water_depth::{BathymetryGrid, BathymetryInterpolation, NonlinearDepthCompression};
+use crate::water_depth::{BathymetryGrid, BathymetryInterpolation, DepthCompression};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -79,9 +79,9 @@ pub struct Jegg500Config {
     pub base_dir: PathBuf,
     /// Interpolation method when sampling the J-EGG500 mesh.
     pub interpolation: JeggInterpolation,
-    /// Optional override for the compression applied after loading. When `None`
-    /// the default `NonlinearDepthCompression` is used.
-    pub compression: Option<NonlinearDepthCompression>,
+    /// Optional override for the depth-to-block mapping applied after loading.
+    /// When `None` the default nonlinear compression is used.
+    pub compression: Option<DepthCompression>,
 }
 
 impl Jegg500Config {
@@ -91,6 +91,13 @@ impl Jegg500Config {
         self.interpolation = interpolation;
         self
     }
+
+    /// Selects the real-depth-to-block mapping used after loading.
+    pub fn with_compression(mut self, compression: DepthCompression) -> Self {
+        self.compression = Some(compression);
+        self
+    }
+
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
         Self {
             base_dir: base_dir.into(),
@@ -541,6 +548,7 @@ mod tests {
     use super::*;
     use crate::coordinate_system::cartesian::XZBBox;
     use crate::coordinate_system::geographic::LLBBox;
+    use crate::water_depth::NonlinearDepthCompression;
 
     #[test]
     fn parse_valid_measured_line() {
@@ -608,6 +616,13 @@ mod tests {
             BathymetryInterpolation::from(config.interpolation),
             BathymetryInterpolation::Nearest
         );
+    }
+
+    #[test]
+    fn config_builder_accepts_linear_compression() {
+        let config = Jegg500Config::new("/tmp")
+            .with_compression(crate::water_depth::DepthCompression::linear());
+        assert_eq!(config.compression.unwrap().compress_meters(100.0), 100);
     }
 
     #[test]
