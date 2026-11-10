@@ -178,6 +178,8 @@ pub enum BathymetryInterpolation {
     Nearest,
     /// Bilinearly interpolate between cell centres. Smooths the lattice into a
     /// continuous surface while preserving the sampled value at each centre.
+    /// Missing corners count as the shallow fallback (0 m), so the data edge
+    /// ramps down into the flat water instead of ending in a vertical step.
     #[default]
     Bilinear,
 }
@@ -191,8 +193,10 @@ pub enum BathymetryInterpolation {
 ///
 /// Samples are addressed by their cell centres. Bilinear interpolation therefore
 /// returns exactly the stored value at a cell centre and a weighted blend on the
-/// boundary between cells. Missing corners are skipped and the remaining weights
-/// renormalised, so partial datasets stay usable.
+/// boundary between cells. Missing corners count as 0 m (the shallow fallback),
+/// so a data edge fades into the flat water instead of ending in a hard square
+/// step. A neighbourhood where every non-zero-weight corner is missing returns
+/// `None` and keeps the fallback water field.
 ///
 /// This type deliberately does not parse J-EGG500/JHA files or perform geographic
 /// projection. Convert source coordinates into this world-aligned grid in the
@@ -395,6 +399,7 @@ impl BathymetryGrid {
 
         let mut sum = 0.0;
         let mut weight_sum = 0.0;
+        let mut any_valid = false;
         for (dx, dz, weight) in [
             (0, 0, (1.0 - tx) * (1.0 - tz)),
             (1, 0, tx * (1.0 - tz)),
@@ -404,15 +409,19 @@ impl BathymetryGrid {
             if weight <= 0.0 {
                 continue;
             }
+            weight_sum += weight;
             let gx = (x0 + dx).clamp(0, self.width as isize - 1) as usize;
             let gz = (z0 + dz).clamp(0, self.height as isize - 1) as usize;
             if let Some(value) = self.depth_value(gx, gz) {
+                // Missing corners intentionally contribute 0 m instead of
+                // being dropped: this is what creates the shallow ramp at the
+                // edge of a partial J-EGG500 dataset.
                 sum += f64::from(value) * weight;
-                weight_sum += weight;
+                any_valid = true;
             }
         }
 
-        (weight_sum > 0.0).then(|| (sum / weight_sum) as f32)
+        (any_valid && weight_sum > 0.0).then(|| (sum / weight_sum) as f32)
     }
 }
 
@@ -599,8 +608,9 @@ pub fn compute_big_water_field_without_legacy(ground: &Ground, xzbbox: &XZBBox) 
 }
 
 /// Computes the ordinary water field, then overrides cells with valid bathymetry
-/// samples. Cells outside the supplied grid or marked NoData retain the existing
-/// distance-transform result, so partial datasets can be used safely.
+/// samples. Cells outside the supplied grid or with no valid sample in their
+/// bilinear neighbourhood retain the existing distance-transform result, so
+/// partial datasets can be used safely.
 pub fn compute_big_water_field_with_bathymetry(
     ground: &Ground,
     xzbbox: &XZBBox,
@@ -613,7 +623,8 @@ pub fn compute_big_water_field_with_bathymetry(
 }
 
 /// Bathymetry-only water field: the synthetic shoreline base is flat, so cells
-/// outside the J-EGG500 data stay flat instead of using the legacy estimate.
+/// with no valid J-EGG500 sample in their interpolation neighbourhood stay flat
+/// instead of using the legacy estimate.
 pub fn compute_big_water_field_with_bathymetry_only(
     ground: &Ground,
     xzbbox: &XZBBox,
@@ -1294,20 +1305,35 @@ mod tests {
     }
 
     #[test]
-    fn bathymetry_bilinear_renormalises_missing_corners() {
+    fn bathymetry_bilinear_ramps_missing_corners_toward_shallow() {
         let grid =
             BathymetryGrid::new(vec![10.0, f32::NAN, f32::NAN, 40.0], 2, 2, 0, 0, 10).unwrap();
         assert_eq!(grid.sample_depth_m(5, 5), Some(10.0));
         assert_eq!(grid.sample_depth_m(15, 15), Some(40.0));
-        assert_eq!(grid.sample_depth_m(10, 10), Some(25.0));
+        assert_eq!(
+            grid.sample_depth_m(10, 10),
+            Some(12.5),
+            "two valid corners blend with two shallow missing corners"
+        );
         assert_eq!(
             grid.sample_depth_m(10, 5),
-            Some(10.0),
-            "the missing corner must not dilute the valid one with zero"
+            Some(5.0),
+            "the missing corner must pull the edge down to half the valid depth"
+        );
+        assert_eq!(
+            grid.sample_depth_m(15, 10),
+            Some(20.0),
+            "the valid corner on the opposite side must still contribute"
+        );
+        assert_eq!(
+            grid.sample_depth_m(15, 5),
+            None,
+            "a missing cell centre has no valid interpolation corner"
         );
 
         let empty = BathymetryGrid::new(vec![f32::NAN; 4], 2, 2, 0, 0, 10).unwrap();
         assert_eq!(empty.sample_depth_m(5, 5), None);
+        assert_eq!(empty.sample_depth_m(10, 10), None);
     }
 
     #[test]
@@ -1691,6 +1717,44 @@ mod water_field_traversal_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn bathymetry_bilinear_ramps_data_edge_into_shallow_water() {
+        let side = 48usize;
+        let bbox = XZBBox::rect_from_min_max(0, 0, side as i32 - 1, side as i32 - 1).unwrap();
+        let ground = all_water_ground(side);
+        let compression = NonlinearDepthCompression::default();
+
+        // Only the top-left quadrant has data; the rest is a missing-data
+        // shelf that must ramp up to the valid depth instead of stepping.
+        let mut depths = vec![f32::NAN; 4];
+        depths[0] = 50.0;
+        let bathymetry = BathymetryGrid::new(depths, 2, 2, 0, 0, side / 2).unwrap();
+        let field =
+            compute_big_water_field_with_bathymetry_only(&ground, &bbox, &bathymetry, compression);
+
+        let data_center = field.depth_at(12, 12);
+        let edge = field.depth_at(24, 12);
+        let missing_center = field.depth_at(36, 12);
+        assert_eq!(
+            data_center,
+            i32::from(compression.compress_meters(50.0)),
+            "the valid cell centre must keep its depth"
+        );
+        assert_eq!(
+            edge,
+            i32::from(compression.compress_meters(25.0)),
+            "the boundary must blend halfway toward the shallow fallback"
+        );
+        assert_eq!(
+            missing_center, 0,
+            "an all-missing cell keeps the flat fallback"
+        );
+        assert!(
+            data_center > edge && edge > missing_center,
+            "expected a ramp from data to shallow water, got {data_center}, {edge}, {missing_center}"
+        );
     }
 
     #[test]

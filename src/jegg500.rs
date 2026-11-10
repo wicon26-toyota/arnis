@@ -57,7 +57,8 @@ pub enum JeggInterpolation {
     NearestCell,
     /// Bilinearly blend between adjacent J-EGG500 cell centres. This removes
     /// the 500 m terraces while still returning the measured value at each
-    /// cell centre; partial datasets fall back to their valid neighbours.
+    /// cell centre. Missing neighbouring cells count as the shallow fallback,
+    /// so the edge of a partial dataset ramps down into flat water.
     #[default]
     Bilinear,
 }
