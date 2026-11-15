@@ -57,4 +57,5 @@ gen/
 
 jegg500/
 
-Arnis World 1/
+# Ignore all generated Arnis World data
+Arnis World [0-9]*/
