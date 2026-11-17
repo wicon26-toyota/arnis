@@ -470,31 +470,61 @@ impl NonlinearDepthCompression {
 ///
 /// The default is [`NonlinearDepthCompression`], which keeps shallow waters
 /// readable while compressing deep ocean. [`DepthCompression::linear`] instead
-/// maps 1 metre of depth to 1 block, capped at the `u8` storage limit; the
-/// world floor can cap it further when the column is carved.
+/// maps 1 metre of depth to 1 block per scale unit, capped at the `u8` storage
+/// limit; the world floor can cap it further when the column is carved.
 #[derive(Clone, Copy, Debug)]
 pub enum DepthCompression {
-    Nonlinear(NonlinearDepthCompression),
-    Linear { max_blocks: u8 },
+    Nonlinear {
+        params: NonlinearDepthCompression,
+        /// Multiplier applied to the base block count (1.0 = default mapping).
+        scale: f64,
+    },
+    Linear {
+        max_blocks: u8,
+        /// Multiplier applied to the real depth in metres (1.0 = 1 m = 1 block).
+        scale: f64,
+    },
 }
 
 impl Default for DepthCompression {
     fn default() -> Self {
-        Self::Nonlinear(NonlinearDepthCompression::default())
+        Self::Nonlinear {
+            params: NonlinearDepthCompression::default(),
+            scale: 1.0,
+        }
     }
 }
 
 impl From<NonlinearDepthCompression> for DepthCompression {
-    fn from(compression: NonlinearDepthCompression) -> Self {
-        Self::Nonlinear(compression)
+    fn from(params: NonlinearDepthCompression) -> Self {
+        Self::Nonlinear { params, scale: 1.0 }
     }
 }
 
 impl DepthCompression {
-    /// One metre of real depth becomes one block, up to the `u8` storage limit.
+    /// One metre of real depth becomes one block per scale unit, up to the `u8`
+    /// storage limit.
+    #[allow(dead_code)]
     pub const fn linear() -> Self {
         Self::Linear {
             max_blocks: u8::MAX,
+            scale: 1.0,
+        }
+    }
+
+    /// Linear mapping with a custom depth scale.
+    pub fn linear_with_scale(scale: f64) -> Self {
+        Self::Linear {
+            max_blocks: u8::MAX,
+            scale,
+        }
+    }
+
+    /// Nonlinear mapping with a custom depth scale.
+    pub fn nonlinear_with_scale(scale: f64) -> Self {
+        Self::Nonlinear {
+            params: NonlinearDepthCompression::default(),
+            scale,
         }
     }
 
@@ -502,12 +532,31 @@ impl DepthCompression {
     #[inline]
     pub fn compress_meters(self, depth_m: f32) -> u8 {
         match self {
-            Self::Nonlinear(compression) => compression.compress_meters(depth_m),
-            Self::Linear { max_blocks } => {
-                if !depth_m.is_finite() || depth_m <= 0.0 || max_blocks == 0 {
+            Self::Nonlinear { params, scale } => {
+                let base = f64::from(params.compress_meters(depth_m));
+                if base <= 0.0 || !scale.is_finite() || scale <= 0.0 {
                     return 0;
                 }
-                depth_m.round().clamp(1.0, f32::from(max_blocks)) as u8
+                let max_blocks = (f64::from(params.max_blocks) * scale)
+                    .round()
+                    .clamp(1.0, f64::from(u8::MAX)) as u8;
+                (base * scale).round().clamp(1.0, f64::from(max_blocks)) as u8
+            }
+            Self::Linear { max_blocks, scale } => {
+                if !depth_m.is_finite()
+                    || depth_m <= 0.0
+                    || max_blocks == 0
+                    || !scale.is_finite()
+                    || scale <= 0.0
+                {
+                    return 0;
+                }
+                let max_blocks_scaled = (f64::from(max_blocks) * scale)
+                    .round()
+                    .clamp(1.0, f64::from(u8::MAX)) as u8;
+                (f64::from(depth_m) * scale)
+                    .round()
+                    .clamp(1.0, f64::from(max_blocks_scaled)) as u8
             }
         }
     }
@@ -1340,6 +1389,31 @@ mod tests {
         assert_eq!(compression.compress_meters(-1.0), 0);
         assert_eq!(compression.compress_meters(f32::NAN), 0);
         assert_eq!(compression.compress_meters(f32::INFINITY), 0);
+    }
+
+    #[test]
+    fn depth_compression_scale_exaggerates_and_compresses() {
+        let linear_2x = DepthCompression::linear_with_scale(2.0);
+        assert_eq!(linear_2x.compress_meters(10.0), 20);
+        assert_eq!(linear_2x.compress_meters(200.0), u8::MAX);
+
+        let linear_half = DepthCompression::linear_with_scale(0.5);
+        assert_eq!(linear_half.compress_meters(10.0), 5);
+        assert_eq!(linear_half.compress_meters(1.0), 1);
+
+        let nonlinear_2x = DepthCompression::nonlinear_with_scale(2.0);
+        let base = DepthCompression::default().compress_meters(100.0);
+        assert_eq!(
+            nonlinear_2x.compress_meters(100.0),
+            (base as u16 * 2).min(u8::MAX as u16) as u8
+        );
+
+        let nonlinear_half = DepthCompression::nonlinear_with_scale(0.5);
+        let base = DepthCompression::default().compress_meters(100.0);
+        assert_eq!(
+            nonlinear_half.compress_meters(100.0),
+            ((base as f64 * 0.5).round() as u8).max(1)
+        );
     }
 
     #[test]

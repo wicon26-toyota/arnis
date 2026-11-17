@@ -284,8 +284,11 @@ fn bin_index(value: i32, origin: i32, cell_size_blocks: usize) -> i32 {
 /// Binning a sample by the cell that happens to contain it leaves holes: the
 /// J-EGG500 lattice is rotated relative to world X/Z and can be offset by half
 /// a cell, so some cells receive no sample while others receive several.
-/// Selecting the nearest sample for every cell fills those holes and avoids
-/// averaging two unrelated depths into a value that is not in the source.
+/// Selecting the nearest sample for every cell fills those holes, keeps the
+/// original measured values intact, and avoids averaging unrelated depths into
+/// a value that is not in the source. The final block-level sampling then uses
+/// bilinear interpolation, so changing the water depth scale or world scale
+/// still produces a smooth seabed.
 fn rasterize_samples(
     samples: &[ProjectedSample],
     grid_origin_x: i32,

@@ -1164,6 +1164,7 @@ fn gui_start_generation(
     jegg500_enabled: bool,
     jegg500_interpolation: bool,
     linear_water_depth_enabled: bool,
+    water_depth_scale: f64,
     legacy_water_depth_enabled: bool,
     underwater_detail_enabled: bool,
     jegg500_dir: String,
@@ -1202,6 +1203,12 @@ fn gui_start_generation(
             emit_gui_error(&e);
             return Err(e);
         }
+    }
+
+    // Guard the water depth scale for the same reason.
+    if let Err(e) = crate::args::validate_water_depth_scale(water_depth_scale) {
+        emit_gui_error(&e);
+        return Err(e);
     }
 
     // Store telemetry consent for crash reporting
@@ -1494,6 +1501,7 @@ fn gui_start_generation(
                 jegg500_enabled,
                 jegg500_interpolation,
                 linear_water_depth: linear_water_depth_enabled,
+                water_depth_scale,
                 legacy_water_depth: legacy_water_depth_enabled,
                 underwater_detail: underwater_detail_enabled,
                 jegg500_dir: {

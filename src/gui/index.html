@@ -401,6 +401,17 @@
           </div>
         </div>
 
+        <!-- Water Depth Scale -->
+        <div class="settings-row">
+          <label for="water-depth-scale-input">
+            <span data-localize="water_depth_scale">Water Depth Scale</span>
+            <span class="tooltip-icon" data-tooltip="Multiplier for J-EGG500 depth. 1.0 is the default mapping; up to 5.0 exaggerates trenches, and down to 0.1 compresses shallow shelves. Applies to both linear and nonlinear modes.">?</span>
+          </label>
+          <div class="settings-control">
+            <input type="number" id="water-depth-scale-input" name="water-depth-scale-input" min="0.1" max="5.0" step="0.1" value="1.0">
+          </div>
+        </div>
+
         <!-- Legacy Water Depth Toggle -->
         <div class="settings-row">
           <label for="legacy-water-depth-toggle">
