@@ -341,6 +341,12 @@ pub fn fetch_data_from_overpass(
             .position(|(_, kind)| *kind == ServerKind::Fallback)
             .unwrap_or(request_plan.len());
 
+        // Retry the whole mirror list a second time after a longer delay, so a
+        // transient outage or rate-limit that affected every server has time to
+        // clear before we give up entirely.
+        let first_round_len = request_plan.len();
+        request_plan.extend(request_plan.clone());
+
         let total = request_plan.len();
         let mut last_error: Option<Box<dyn std::error::Error>> = None;
         let mut attempted_hosts: Vec<String> = Vec::new();
@@ -406,7 +412,13 @@ pub fn fetch_data_from_overpass(
                         }
 
                         if i + 1 < total {
-                            let delay_secs = if *kind == ServerKind::Fallback { 5 } else { 3 };
+                            let is_second_round = i >= first_round_len;
+                            let delay_secs = match (*kind, is_second_round) {
+                                (ServerKind::Fallback, true) => 15,
+                                (_, true) => 10,
+                                (ServerKind::Fallback, false) => 5,
+                                (_, false) => 3,
+                            };
                             println!("Retrying in {delay_secs}s (attempt {}/{total})...", i + 1);
                             std::thread::sleep(Duration::from_secs(delay_secs));
                             if i + 1 == first_fallback_index {
