@@ -666,9 +666,9 @@ pub fn generate_world_with_options(
             JeggInterpolation::NearestCell
         };
         let compression = if args.linear_water_depth {
-            DepthCompression::linear()
+            DepthCompression::linear_with_scale(args.water_depth_scale)
         } else {
-            DepthCompression::default()
+            DepthCompression::nonlinear_with_scale(args.water_depth_scale)
         };
         let config = Jegg500Config::new(dir)
             .with_interpolation(interpolation)

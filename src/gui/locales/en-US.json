@@ -70,6 +70,7 @@
   "jegg500_dir": "J-EGG500 Data Directory",
   "jegg500_interpolation": "Smooth Bathymetry Interpolation",
   "linear_water_depth": "Linear Water Depth (1 m = 1 block)",
+  "water_depth_scale": "Water Depth Scale",
   "jegg500_data_note": "J-EGG500 data is provided by the Japan Oceanographic Data Center (JODC). Credit JODC in published results and submit one copy to JODC.",
   "legacy_water_depth": "Legacy Water Depth",
   "underwater_detail": "Underwater Detail",

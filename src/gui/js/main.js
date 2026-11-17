@@ -2225,6 +2225,11 @@ async function startGeneration() {
     var jegg500_interpolation = !jegg500InterpolationToggle.disabled && jegg500InterpolationToggle.checked;
     var linearWaterDepthToggle = document.getElementById("linear-water-depth-toggle");
     var linear_water_depth = !linearWaterDepthToggle.disabled && linearWaterDepthToggle.checked;
+    var waterDepthScaleInput = document.getElementById("water-depth-scale-input");
+    var water_depth_scale = waterDepthScaleInput ? parseFloat(waterDepthScaleInput.value) : 1.0;
+    if (!Number.isFinite(water_depth_scale)) {
+      water_depth_scale = 1.0;
+    }
     var legacyWaterDepthToggle = document.getElementById("legacy-water-depth-toggle");
     var legacy_water_depth = !legacyWaterDepthToggle.disabled && legacyWaterDepthToggle.checked;
     var underwaterDetailToggle = document.getElementById("underwater-detail-toggle");
@@ -2292,6 +2297,7 @@ async function startGeneration() {
         jegg500Enabled: jegg500_enabled,
         jegg500Interpolation: jegg500_interpolation,
         linearWaterDepthEnabled: linear_water_depth,
+        waterDepthScale: water_depth_scale,
         legacyWaterDepthEnabled: legacy_water_depth,
         underwaterDetailEnabled: underwater_detail,
         jegg500Dir: jegg500_dir

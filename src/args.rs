@@ -171,6 +171,14 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub linear_water_depth: bool,
 
+    /// Scale factor for J-EGG500 real water depth when carving the seabed.
+    /// 1.0 keeps the default mapping (1 m = 1 block in linear mode, or the
+    /// default nonlinear curve). Values between 0.1 and 5.0 compress or
+    /// exaggerate depth, so shallow shelves and deep trenches can both be
+    /// tuned independently of the world X/Z scale.
+    #[arg(long, default_value_t = 1.0, allow_hyphen_values = true, value_parser = parse_water_depth_scale)]
+    pub water_depth_scale: f64,
+
     /// Generate synthetic shoreline-distance water depth where J-EGG500 data is
     /// unavailable. Enabled by default; `--no-legacy-water-depth` leaves those
     /// cells flat instead.
@@ -323,6 +331,27 @@ fn parse_scale(arg: &str) -> Result<f64, String> {
         .parse()
         .map_err(|_| format!("`{arg}` is not a number"))?;
     validate_scale(scale)?;
+    Ok(scale)
+}
+
+/// Rejects NaN, infinities and out-of-range water depth scale factors.
+pub fn validate_water_depth_scale(scale: f64) -> Result<(), String> {
+    if !scale.is_finite() {
+        return Err("Water depth scale must be a finite number.".to_string());
+    }
+    if !(0.1..=5.0).contains(&scale) {
+        return Err(
+            "Water depth scale must be between 0.1 and 5.0 (1.0 = default mapping).".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn parse_water_depth_scale(arg: &str) -> Result<f64, String> {
+    let scale: f64 = arg
+        .parse()
+        .map_err(|_| format!("`{arg}` is not a number"))?;
+    validate_water_depth_scale(scale)?;
     Ok(scale)
 }
 
@@ -540,6 +569,9 @@ pub fn validate_args(args: &Args) -> Result<(), String> {
     if !args.rotation.is_finite() || args.rotation < -90.0 || args.rotation > 90.0 {
         return Err("Rotation angle must be between -90 and 90 degrees.".to_string());
     }
+
+    // Validate water depth scale (also rejects NaN and infinity)
+    validate_water_depth_scale(args.water_depth_scale)?;
 
     let (floor, ceiling) = ground_level_bounds(args);
     if args.ground_level < floor || args.ground_level > ceiling {
@@ -913,6 +945,52 @@ mod tests {
         ];
         let args = Args::parse_from(cmd.iter());
         assert!(args.linear_water_depth);
+    }
+
+    #[test]
+    fn water_depth_scale_defaults_to_one_and_validates() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp_path = tmpdir.path().to_str().unwrap();
+
+        let cmd = ["arnis", "--output-dir", tmp_path, "--bbox", "1,2,3,4"];
+        let args = Args::parse_from(cmd.iter());
+        assert_eq!(args.water_depth_scale, 1.0);
+        assert!(validate_args(&args).is_ok());
+
+        let cmd = [
+            "arnis",
+            "--output-dir",
+            tmp_path,
+            "--bbox",
+            "1,2,3,4",
+            "--water-depth-scale",
+            "5.0",
+        ];
+        let args = Args::parse_from(cmd.iter());
+        assert_eq!(args.water_depth_scale, 5.0);
+        assert!(validate_args(&args).is_ok());
+
+        let cmd = [
+            "arnis",
+            "--output-dir",
+            tmp_path,
+            "--bbox",
+            "1,2,3,4",
+            "--water-depth-scale",
+            "0.05",
+        ];
+        assert!(Args::try_parse_from(cmd.iter()).is_err());
+
+        let cmd = [
+            "arnis",
+            "--output-dir",
+            tmp_path,
+            "--bbox",
+            "1,2,3,4",
+            "--water-depth-scale",
+            "10.0",
+        ];
+        assert!(Args::try_parse_from(cmd.iter()).is_err());
     }
 
     #[test]
