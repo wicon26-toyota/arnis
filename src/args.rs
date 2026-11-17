@@ -64,6 +64,12 @@ pub struct Args {
     #[arg(long, value_enum, default_value_t = GenerationMode::GeoTerrain)]
     pub mode: GenerationMode,
 
+    /// Below --scale 0.30, generate only OSM and Overture building footprints
+    /// instead of skipping every object. Roads and fixed-size props stay omitted
+    /// because they no longer fit the scale. Terrain-only mode ignores this flag.
+    #[arg(long, default_value_t = false)]
+    pub small_scale_buildings: bool,
+
     /// Deprecated: terrain is on by default, use --mode geo-only for flat ground.
     /// Accepted as a no-op so existing scripts keep working.
     #[arg(long = "terrain", hide = true)]
@@ -288,7 +294,8 @@ impl GenerationMode {
 
 /// Below this scale, OSM objects stop being representable: road half-widths floor at 1
 /// (so every road is >= 3 blocks = 10 m across at 0.3), buildings collapse into 1x1x3
-/// pillars, and fixed-size props come to dominate the scene. Objects are skipped instead.
+/// pillars, and fixed-size props come to dominate the scene. Objects are skipped instead,
+/// unless `--small-scale-buildings` keeps building footprints only.
 pub const OBJECT_SKIP_SCALE: f64 = 0.3;
 
 /// Smallest usable scale. 0.002 renders even a city-sized bbox as a miniature model;
@@ -325,14 +332,21 @@ impl Args {
         self.mode.terrain()
     }
 
-    /// Whether this run skips OSM/Overture objects (terrain-only, or too small a scale).
+    /// Whether this run skips OSM/Overture objects (terrain-only, or too small a scale
+    /// without the small-scale buildings opt-in).
     pub fn skip_objects(&self) -> bool {
-        self.mode.skip_objects() || self.scale < OBJECT_SKIP_SCALE
+        self.mode.skip_objects() || (self.scale < OBJECT_SKIP_SCALE && !self.small_scale_buildings)
     }
 
     /// Whether objects are being skipped only because the scale is below `OBJECT_SKIP_SCALE`.
     pub fn skip_objects_due_to_scale(&self) -> bool {
-        !self.mode.skip_objects() && self.scale < OBJECT_SKIP_SCALE
+        !self.mode.skip_objects() && self.scale < OBJECT_SKIP_SCALE && !self.small_scale_buildings
+    }
+
+    /// Whether this run keeps building footprints but drops every other object because
+    /// the scale is below `OBJECT_SKIP_SCALE`. Terrain-only still wins over this option.
+    pub fn small_scale_buildings_only(&self) -> bool {
+        !self.mode.skip_objects() && self.small_scale_buildings && self.scale < OBJECT_SKIP_SCALE
     }
 }
 
@@ -380,6 +394,7 @@ pub fn apply_body_defaults(args: &mut Args) {
     }
     args.scale = args.body.world_scale();
     args.mode = GenerationMode::TerrainOnly;
+    args.small_scale_buildings = false;
     args.overture = false;
     args.canopy_height = false;
     args.use_3d = false;
@@ -598,6 +613,45 @@ mod tests {
     }
 
     #[test]
+    fn small_scale_buildings_opt_in_keeps_only_buildings() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp_path = tmpdir.path().to_str().unwrap();
+        let parse = |extra: &[&str]| {
+            let mut cmd = vec!["arnis", "--output-dir", tmp_path, "--bbox", "1,2,3,4"];
+            cmd.extend_from_slice(extra);
+            Args::parse_from(cmd.iter())
+        };
+
+        // Below the threshold, the default still skips every object.
+        let args = parse(&["--scale", "0.1"]);
+        assert!(args.skip_objects());
+        assert!(args.skip_objects_due_to_scale());
+        assert!(!args.small_scale_buildings_only());
+
+        // The opt-in fetches objects again, but the caller keeps only buildings.
+        let args = parse(&["--scale", "0.1", "--small-scale-buildings"]);
+        assert!(!args.skip_objects());
+        assert!(!args.skip_objects_due_to_scale());
+        assert!(args.small_scale_buildings_only());
+
+        // Terrain-only must keep winning over the opt-in.
+        let args = parse(&[
+            "--scale",
+            "0.1",
+            "--small-scale-buildings",
+            "--mode",
+            "terrain-only",
+        ]);
+        assert!(args.skip_objects());
+        assert!(!args.small_scale_buildings_only());
+
+        // Above the threshold the opt-in changes nothing.
+        let args = parse(&["--scale", "1.0", "--small-scale-buildings"]);
+        assert!(!args.skip_objects());
+        assert!(!args.small_scale_buildings_only());
+    }
+
+    #[test]
     fn web_mercator_projection_is_rejected() {
         let tmpdir = tempfile::tempdir().unwrap();
         let tmp_path = tmpdir.path().to_str().unwrap();
@@ -716,6 +770,7 @@ mod tests {
         assert_eq!(args.mode, GenerationMode::GeoTerrain);
         assert!(args.terrain());
         assert!(!args.skip_objects());
+        assert!(!args.small_scale_buildings);
         assert!(!args.legacy_terrain);
         assert!(!args.bedrock);
         assert!(!args.disable_height_limit);

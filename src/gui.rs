@@ -1139,6 +1139,7 @@ fn gui_start_generation(
     ground_level: i32,
     terrain_enabled: bool,
     skip_osm_objects: bool,
+    small_scale_buildings: bool,
     interior_enabled: bool,
     fillground_enabled: bool,
     legacy_trees_enabled: bool,
@@ -1468,6 +1469,7 @@ fn gui_start_generation(
                 } else {
                     crate::args::GenerationMode::GeoOnly
                 },
+                small_scale_buildings,
                 legacy_terrain: false,
                 interior: interior_enabled,
                 fillground: fillground_enabled,
@@ -1589,7 +1591,13 @@ fn gui_start_generation(
                 });
                 let ground_handle = s.spawn(|| ground::generate_ground_data(&args, bbox));
                 let fetch_result =
-                    retrieve_data::fetch_data_from_overpass(bbox, args.debug, "requests", None);
+                    retrieve_data::fetch_data_from_overpass(
+                        bbox,
+                        args.debug,
+                        "requests",
+                        None,
+                        args.small_scale_buildings_only(),
+                    );
                 // A panicked worker already reported itself through the panic hook.
                 // Overture is supplementary, so drop it and keep going; terrain is
                 // not, so hand the failure back instead of taking the app down.
@@ -1653,6 +1661,18 @@ fn gui_start_generation(
                     ground.apply_osm_water_override(&parsed_elements, &xzbbox);
                     ground.apply_osm_land_override(&parsed_elements, &xzbbox, args.scale);
                     ground.apply_bridge_land_cover_repair(&parsed_elements, &xzbbox, args.scale);
+
+                    // Terrain and land cover use every element above, but the world
+                    // below OBJECT_SKIP_SCALE only gets building footprints in the
+                    // opt-in mode.
+                    if args.small_scale_buildings_only() {
+                        let removed = osm_parser::retain_building_elements(&mut parsed_elements);
+                        println!(
+                            "Building-only small-scale mode: kept {} building elements, omitted {} other objects",
+                            parsed_elements.len(),
+                            removed
+                        );
+                    }
 
                     // Transform map (parsed_elements). Operations are defined in a json file
                     map_transformation::transform_map(

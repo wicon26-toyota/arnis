@@ -212,35 +212,20 @@ pub fn fetch_data_from_file(
     }
 }
 
-/// Main function to fetch data
-pub fn fetch_data_from_overpass(
-    bbox: LLBBox,
-    debug: bool,
-    download_method: &str,
-    save_file: Option<&str>,
-) -> Result<OsmData, Box<dyn std::error::Error>> {
-    println!("{} Fetching data...", "[1/7]".bold());
-    emit_gui_progress_update(1.0, "Downloading data...");
-
-    // List of Overpass API servers
-    let arnis_api_server = "https://api.arnismc.com/overpass/api/interpreter";
-    let api_servers: Vec<&str> = vec![
-        "https://overpass-api.de/api/interpreter",
-        "https://lz4.overpass-api.de/api/interpreter",
-        "https://z.overpass-api.de/api/interpreter",
-    ];
-    let fallback_api_servers: Vec<&str> = vec![
-        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-        "https://overpass.private.coffee/api/interpreter",
-    ];
-
-    // Generate Overpass API query for bounding box.
-    // Ocean/coastal elements are excluded because ESA WorldCover satellite data
-    // handles ocean detection more reliably at 10m resolution (LC_WATER class).
-    // Inland water (lakes, rivers, ponds) is still fetched from OSM.
-    let query: String = format!(
-        r#"[out:json][timeout:360][bbox:{},{},{},{}];
-    (
+/// Builds the Overpass query for a bounding box.
+///
+/// `buildings_only` drops every non-building clause. Below `OBJECT_SKIP_SCALE`
+/// the optional small-scale mode generates nothing else, so fetching roads and
+/// props would only add load to the public servers. The recursion still emits
+/// the member ways and nodes of building relations, which the parser needs.
+fn build_overpass_query(bbox: &LLBBox, buildings_only: bool) -> String {
+    let selectors = if buildings_only {
+        r#"
+        nwr["building"];
+        nwr["building:part"];
+        relation["type"="building"];"#
+    } else {
+        r#"
         nwr["building"];
         nwr["building:part"];
         relation["type"="building"];
@@ -268,7 +253,11 @@ pub fn fetch_data_from_overpass(
         nwr["shop"];
         nwr["office"];
         way["place"]["place"!~"^(ocean|sea|bay|strait|sound|fjord)$"];
-        way;
+        way;"#
+    };
+    format!(
+        r#"[out:json][timeout:360][bbox:{},{},{},{}];
+    ({selectors}
     )->.relsinbbox;
     (
         way(r.relsinbbox);
@@ -284,7 +273,37 @@ pub fn fetch_data_from_overpass(
         bbox.min().lng(),
         bbox.max().lat(),
         bbox.max().lng(),
-    );
+    )
+}
+
+/// Main function to fetch data
+pub fn fetch_data_from_overpass(
+    bbox: LLBBox,
+    debug: bool,
+    download_method: &str,
+    save_file: Option<&str>,
+    buildings_only: bool,
+) -> Result<OsmData, Box<dyn std::error::Error>> {
+    println!("{} Fetching data...", "[1/7]".bold());
+    emit_gui_progress_update(1.0, "Downloading data...");
+
+    // List of Overpass API servers
+    let arnis_api_server = "https://api.arnismc.com/overpass/api/interpreter";
+    let api_servers: Vec<&str> = vec![
+        "https://overpass-api.de/api/interpreter",
+        "https://lz4.overpass-api.de/api/interpreter",
+        "https://z.overpass-api.de/api/interpreter",
+    ];
+    let fallback_api_servers: Vec<&str> = vec![
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+        "https://overpass.private.coffee/api/interpreter",
+    ];
+
+    // Generate Overpass API query for bounding box.
+    // Ocean/coastal elements are excluded because ESA WorldCover satellite data
+    // handles ocean detection more reliably at 10m resolution (LC_WATER class).
+    // Inland water (lakes, rivers, ponds) is still fetched from OSM.
+    let query = build_overpass_query(&bbox, buildings_only);
 
     {
         // Fetch data from Overpass API.
@@ -534,6 +553,31 @@ mod user_agent_tests {
         // Only ASCII, and short enough that no server's header limit is in play.
         assert!(OSM_USER_AGENT.is_ascii());
         assert!(OSM_USER_AGENT.len() < 200);
+    }
+}
+
+#[cfg(test)]
+mod overpass_query_tests {
+    use super::*;
+
+    #[test]
+    fn building_only_query_drops_non_building_layers() {
+        let bbox = LLBBox::new(1.0, 2.0, 3.0, 4.0).unwrap();
+
+        let buildings = build_overpass_query(&bbox, true);
+        assert!(buildings.contains(r#"nwr["building"]"#));
+        assert!(buildings.contains(r#"nwr["building:part"]"#));
+        assert!(buildings.contains(r#"relation["type"="building"]"#));
+        assert!(!buildings.contains(r#"nwr["highway"]"#));
+        assert!(!buildings.contains(r#"nwr["landuse"]"#));
+        assert!(!buildings.contains(r#"nwr["water"]"#));
+        // Building way nodes come from the relation/way recursion below.
+        assert!(buildings.contains("node(w.relsinbbox)"));
+
+        let full = build_overpass_query(&bbox, false);
+        assert!(full.contains(r#"nwr["highway"]"#));
+        assert!(full.contains(r#"nwr["landuse"]"#));
+        assert!(full.contains("way;"));
     }
 }
 

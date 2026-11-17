@@ -10,6 +10,7 @@
   "winter_mode": "Winter Mode",
   "world_scale": "World Scale",
   "world_scale_objects_skipped": "Below 0.30 buildings and roads are too small to render, so only terrain and land cover are generated.",
+  "small_scale_buildings": "Buildings at Small Scale",
   "custom_bounding_box": "Bounding Box",
   "floodfill_timeout": "Floodfill Timeout (sec)",
   "ground_level": "Ground Level",

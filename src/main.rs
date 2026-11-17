@@ -364,6 +364,13 @@ fn run_cli() {
             args.scale,
             args::OBJECT_SKIP_SCALE
         );
+    } else if args.small_scale_buildings_only() {
+        println!(
+            "{} Scale {:.2} is below {:.2}: generating building footprints only (roads and other objects are skipped)",
+            "[1/7]".bold(),
+            args.scale,
+            args::OBJECT_SKIP_SCALE
+        );
     } else if skip_objects {
         println!(
             "{} Terrain-only mode: skipping OpenStreetMap and Overture objects",
@@ -411,6 +418,7 @@ fn run_cli() {
                 args.debug,
                 args.downloader.as_str(),
                 args.save_json_file.as_deref(),
+                args.small_scale_buildings_only(),
             )
             .expect("Failed to fetch data")
         };
@@ -509,6 +517,17 @@ fn run_cli() {
             )
             .expect("Failed to write to output file");
         }
+    }
+
+    // Terrain and land cover still use every element above, but the world below
+    // OBJECT_SKIP_SCALE only gets building footprints in the opt-in mode.
+    if args.small_scale_buildings_only() {
+        let removed = osm_parser::retain_building_elements(&mut parsed_elements);
+        println!(
+            "  Building-only small-scale mode: kept {} building elements, omitted {} other objects",
+            parsed_elements.len().to_string().bright_white().bold(),
+            removed.to_string().bright_white().bold()
+        );
     }
 
     // Transform map (parsed_elements). Operations are defined in a json file

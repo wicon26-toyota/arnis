@@ -39,6 +39,7 @@ const SETTINGS = [
   { id: 'bake-lighting-toggle', kind: 'checkbox', store: OWN },
   { id: 'voxy-lod-toggle', kind: 'checkbox', store: OWN },
   { id: 'scale-value-input', kind: 'number', store: OWN },
+  { id: 'small-scale-buildings-toggle', kind: 'checkbox', store: OWN },
 
   // Not persisted: picking a bbox force-resets the angle to 0 anyway.
   { id: 'rotation-angle-input', kind: 'number', store: NONE },

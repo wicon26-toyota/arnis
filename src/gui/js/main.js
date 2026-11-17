@@ -119,6 +119,7 @@ async function applyLocalization(localization) {
     "h2[data-localize='customization_settings']": "customization_settings",
     "span[data-localize='world_scale']": "world_scale",
     "span[data-localize='world_scale_objects_skipped']": "world_scale_objects_skipped",
+    "span[data-localize='small_scale_buildings']": "small_scale_buildings",
     "span[data-localize='custom_bounding_box']": "custom_bounding_box",
     // DEPRECATED: Ground level localization removed
     // "label[data-localize='ground_level']": "ground_level",
@@ -419,6 +420,7 @@ const EARTH_ONLY_SETTINGS = [
   'canopy-height-toggle',
   'legacy-trees-toggle',
   'scale-value-input',
+  'small-scale-buildings-toggle',
   'aws-only-elevation-toggle',
   'disable-height-limit-toggle',
   'jegg500-enabled-toggle',
@@ -941,16 +943,37 @@ function initSettings() {
   // Mirrors OBJECT_SKIP_SCALE in src/args.rs
   const OBJECT_SKIP_SCALE = 0.3;
   const scaleObjectsNote = document.getElementById("scale-objects-note");
+  const smallScaleBuildingsRow = document.getElementById("small-scale-buildings-row");
+  const smallScaleBuildingsToggle = document.getElementById("small-scale-buildings-toggle");
+  const generationModeSelect = document.getElementById("generation-mode-select");
 
   function refreshScaleDisplay() {
     const value = parseFloat(scaleInput.value);
+    const belowThreshold = Number.isFinite(value) && value < OBJECT_SKIP_SCALE;
+    const terrainOnly =
+      generationModeSelect && generationModeSelect.value === "terrain-only";
+    const buildingsOnly =
+      belowThreshold &&
+      !terrainOnly &&
+      smallScaleBuildingsToggle &&
+      !smallScaleBuildingsToggle.disabled &&
+      smallScaleBuildingsToggle.checked;
     if (scaleObjectsNote) {
-      scaleObjectsNote.style.display =
-        Number.isFinite(value) && value < OBJECT_SKIP_SCALE ? "" : "none";
+      scaleObjectsNote.style.display = belowThreshold && !buildingsOnly ? "" : "none";
+    }
+    if (smallScaleBuildingsRow) {
+      smallScaleBuildingsRow.style.display =
+        belowThreshold && !terrainOnly ? "" : "none";
     }
   }
 
   scaleInput.addEventListener("input", refreshScaleDisplay);
+  if (smallScaleBuildingsToggle) {
+    smallScaleBuildingsToggle.addEventListener("change", refreshScaleDisplay);
+  }
+  if (generationModeSelect) {
+    generationModeSelect.addEventListener("change", refreshScaleDisplay);
+  }
   refreshScaleDisplay();
 
   // Game mode segmented control
@@ -2181,6 +2204,9 @@ async function startGeneration() {
 
     var interior = document.getElementById("interior-toggle").checked;
     var fill_ground = document.getElementById("fillground-toggle").checked;
+    var smallScaleBuildingsToggle = document.getElementById("small-scale-buildings-toggle");
+    var small_scale_buildings =
+      !smallScaleBuildingsToggle.disabled && smallScaleBuildingsToggle.checked;
     var legacy_trees = document.getElementById("legacy-trees-toggle").checked;
     var canopy_height = document.getElementById("canopy-height-toggle").checked;
     var maxTreeSizeBtn = document.querySelector("#max-tree-size-group .segment.active");
@@ -2241,6 +2267,7 @@ async function startGeneration() {
         groundLevel: ground_level,
         terrainEnabled: terrain,
         skipOsmObjects: skipOsmObjects,
+        smallScaleBuildings: small_scale_buildings,
         interiorEnabled: interior,
         fillgroundEnabled: fill_ground,
         legacyTreesEnabled: legacy_trees,

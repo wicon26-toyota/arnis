@@ -505,6 +505,34 @@ impl ProcessedElement {
     }
 }
 
+/// Whether an element produces building geometry: a building/building:part way,
+/// or a building relation (including `type=building` multipolygons).
+fn is_building_element(element: &ProcessedElement) -> bool {
+    match element {
+        ProcessedElement::Way(way) => {
+            way.tags.contains_key("building") || way.tags.contains_key("building:part")
+        }
+        ProcessedElement::Relation(rel) => {
+            rel.tags.contains_key("building")
+                || rel.tags.contains_key("building:part")
+                || rel.tags.get("type").map(String::as_str) == Some("building")
+        }
+        ProcessedElement::Node(_) => false,
+    }
+}
+
+/// Drops everything that cannot produce building geometry, keeping only building
+/// ways and relations. Returns how many elements were removed.
+///
+/// Below `OBJECT_SKIP_SCALE`, roads and fixed-size props no longer fit the world,
+/// but building footprints still mark settlements. Callers run this after the OSM
+/// land/water overrides, which need the full element set.
+pub fn retain_building_elements(elements: &mut Vec<ProcessedElement>) -> usize {
+    let before = elements.len();
+    elements.retain(is_building_element);
+    before - elements.len()
+}
+
 pub type OutlineSuppression = HashSet<(&'static str, u64)>;
 
 // building:part way id -> shared style seed (containing outline id, or salted relation id)
@@ -1836,6 +1864,45 @@ mod outline_suppression_tests {
             )])),
             members,
         }
+    }
+
+    #[test]
+    fn retain_building_elements_keeps_only_buildings() {
+        let tags = |key: &str, value: &str| HashMap::from([(key.to_string(), value.to_string())]);
+        let way = |id: u64, tags: HashMap<String, String>| {
+            ProcessedElement::Way(ProcessedWay {
+                id,
+                nodes: Vec::new(),
+                tags,
+            })
+        };
+        let mut elements = vec![
+            ProcessedElement::Node(ProcessedNode {
+                id: 1,
+                tags: tags("amenity", "bench"),
+                x: 0,
+                z: 0,
+            }),
+            way(2, tags("highway", "residential")),
+            way(3, tags("building", "house")),
+            way(4, tags("building:part", "yes")),
+            ProcessedElement::Relation(ProcessedRelation {
+                id: 5,
+                tags: tags("type", "building"),
+                members: Vec::new(),
+            }),
+            ProcessedElement::Relation(ProcessedRelation {
+                id: 6,
+                tags: tags("type", "multipolygon"),
+                members: Vec::new(),
+            }),
+        ];
+
+        assert_eq!(retain_building_elements(&mut elements), 3);
+        assert_eq!(
+            elements.iter().map(|e| e.id()).collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
     }
 
     // Therme Erding: parts cover ~24% of the outline, so the outline must survive.

@@ -131,6 +131,7 @@ Windows の場合は、出力先を例えば次のように指定します。
 | `--bbox` | 生成範囲（`min_lat,min_lng,max_lat,max_lng`） |
 | `--mode` | `geo-terrain`（標高＋OSM、デフォルト） / `geo-only`（平坦＋OSM） / `terrain-only`（標高のみ） |
 | `--scale` | ワールドスケール（1.0 = 実寸） |
+| `--small-scale-buildings` | `--scale` が 0.30 未満でも建物のフットプリントのみ生成（道路や固定サイズのオブジェクトは省略） |
 | `--body` | `earth` / `moon` / `mars`（月・火星は地形のみ） |
 | `--rotation` | ワールドの回転角度（度、`-90`〜`90`、正の値で時計回り） |
 | `--bedrock` | Bedrock Edition 用 `.mcworld` を生成 |

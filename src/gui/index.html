@@ -317,6 +317,17 @@
           <span data-localize="world_scale_objects_skipped">Below 0.30 buildings and roads are too small to render, so only terrain and land cover are generated.</span>
         </div>
 
+        <!-- Keep building footprints below the object skip scale -->
+        <div class="settings-row" id="small-scale-buildings-row" style="display: none;">
+          <label for="small-scale-buildings-toggle">
+            <span data-localize="small_scale_buildings">Buildings at Small Scale</span>
+            <span class="tooltip-icon" data-tooltip="Below 0.30, generate OSM and Overture building footprints instead of skipping every object. Roads and fixed-size props stay omitted; buildings shrink to small pillars.">?</span>
+          </label>
+          <div class="settings-control">
+            <input type="checkbox" id="small-scale-buildings-toggle" name="small-scale-buildings-toggle">
+          </div>
+        </div>
+
         <!-- Rotation Angle -->
         <div class="settings-row">
           <label for="rotation-angle-input">
